@@ -30,6 +30,9 @@ editor.setOptions({
     enableLiveAutocompletion: true
 });
 
+//启用搜索扩展
+ace.require("ace/ext/language_tools");
+
 //绑定查询快捷键
 editor.commands.addCommand({
     name: "alter",
@@ -37,7 +40,7 @@ editor.commands.addCommand({
     exec: function (editor) {
         let pathname = window.location.pathname;
         if (pathname === "/sqlquery/") {
-            sqlquery();
+            dosqlquery()
         }
     }
 });
@@ -168,7 +171,7 @@ $("#instance_name").change(function () {
         editor.session.setMode("ace/mode/" + "mysql");
         // 提示信息
         let pathname = window.location.pathname;
-        if (pathname === "/submitsql/") {
+        if (pathname === "/submitsql/" && !editor.getValue()) {
             editor.setValue("-- 请在此输入SQL，以分号结尾，仅支持DML和DDL语句，查询语句请使用SQL查询功能。\n");
             editor.clearSelection();
             editor.focus();  //获取焦点
@@ -184,7 +187,7 @@ $("#instance_name").change(function () {
         });
         // 提示信息
         let pathname = window.location.pathname;
-        if (pathname === "/submitsql/") {
+        if (pathname === "/submitsql/" && !editor.getValue()) {
             editor.setValue("请在此输入命令，多个命令请换行填写，在提交时请删除此行说明");
             editor.focus();  //获取焦点
         }

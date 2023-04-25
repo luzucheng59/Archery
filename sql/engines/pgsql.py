@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-""" 
+"""
 @author: hhyo、yyukai
 @license: Apache Licence
 @file: pgsql.py
@@ -16,66 +16,92 @@ from common.utils.timer import FuncTimer
 from sql.utils.sql_utils import get_syntax_type
 from . import EngineBase
 from .models import ResultSet, ReviewSet, ReviewResult
+from sql.utils.data_masking import simple_column_mask
 
-__author__ = 'hhyo、yyukai'
+__author__ = "hhyo、yyukai"
 
-logger = logging.getLogger('default')
+logger = logging.getLogger("default")
 
 
 class PgSQLEngine(EngineBase):
+    test_query = "SELECT 1"
+
     def get_connection(self, db_name=None):
+        db_name = db_name or self.db_name or "postgres"
         if self.conn:
             return self.conn
-        self.conn = psycopg2.connect(host=self.host, port=self.port, user=self.user,
-                                     password=self.password, dbname=db_name)
+        self.conn = psycopg2.connect(
+            host=self.host,
+            port=self.port,
+            user=self.user,
+            password=self.password,
+            dbname=db_name,
+            connect_timeout=10,
+        )
         return self.conn
 
     @property
     def name(self):
-        return 'PgSQL'
+        return "PgSQL"
 
     @property
     def info(self):
-        return 'PgSQL engine'
+        return "PgSQL engine"
 
     def get_all_databases(self):
         """
         获取数据库列表
         :return:
         """
-        result = self._query(sql=f"SELECT datname FROM pg_database;")
-        db_list = [row[0] for row in result.rows if row[0] not in ['postgres', 'template0', 'template1']]
+        result = self.query(sql=f"SELECT datname FROM pg_database;")
+        db_list = [
+            row[0] for row in result.rows if row[0] not in ["template0", "template1"]
+        ]
         result.rows = db_list
         return result
 
-    def get_all_schemas(self, db_name):
+    def get_all_schemas(self, db_name, **kwargs):
         """
         获取模式列表
         :return:
         """
-        result = self.query(db_name=db_name, sql=f"select schema_name from information_schema.schemata;")
-        schema_list = [row[0] for row in result.rows if row[0] not in ['information_schema',
-                                                                       'pg_catalog', 'pg_toast_temp_1',
-                                                                       'pg_temp_1', 'pg_toast']]
+        result = self.query(
+            db_name=db_name, sql=f"select schema_name from information_schema.schemata;"
+        )
+        schema_list = [
+            row[0]
+            for row in result.rows
+            if row[0]
+            not in [
+                "information_schema",
+                "pg_catalog",
+                "pg_toast_temp_1",
+                "pg_temp_1",
+                "pg_toast",
+            ]
+        ]
         result.rows = schema_list
         return result
 
-    def get_all_tables(self, db_name, schema_name=None):
+    def get_all_tables(self, db_name, **kwargs):
         """
         获取表列表
         :param db_name:
         :param schema_name:
         :return:
         """
-        sql = f"""SELECT table_name 
-        FROM information_schema.tables 
-        where table_schema ='{schema_name}';"""
-        result = self.query(db_name=db_name, sql=sql)
-        tb_list = [row[0] for row in result.rows if row[0] not in ['test']]
+        schema_name = kwargs.get("schema_name")
+        sql = f"""SELECT table_name
+        FROM information_schema.tables
+        where table_schema =%(schema_name)s;"""
+        result = self.query(
+            db_name=db_name, sql=sql, parameters={"schema_name": schema_name}
+        )
+        tb_list = [row[0] for row in result.rows if row[0] not in ["test"]]
         result.rows = tb_list
         return result
 
-    def get_all_columns_by_tb(self, db_name, tb_name, schema_name=None):
+    def get_all_columns_by_tb(self, db_name, tb_name, **kwargs):
         """
         获取字段列表
         :param db_name:
@@ -83,16 +109,21 @@ class PgSQLEngine(EngineBase):
         :param schema_name:
         :return:
         """
+        schema_name = kwargs.get("schema_name")
         sql = f"""SELECT column_name
-        FROM information_schema.columns 
-        where table_name='{tb_name}'
-        and table_schema ='{schema_name}';"""
-        result = self.query(db_name=db_name, sql=sql)
+        FROM information_schema.columns
+        where table_name=%(tb_name)s
+        and table_schema=%(schema_name)s;"""
+        result = self.query(
+            db_name=db_name,
+            sql=sql,
+            parameters={"schema_name": schema_name, "tb_name": tb_name},
+        )
         column_list = [row[0] for row in result.rows]
         result.rows = column_list
         return result
 
-    def describe_table(self, db_name, tb_name, schema_name=None):
+    def describe_table(self, db_name, tb_name, **kwargs):
         """
         获取表结构信息
         :param db_name:
@@ -100,6 +131,7 @@ class PgSQLEngine(EngineBase):
         :param schema_name:
         :return:
         """
+        schema_name = kwargs.get("schema_name")
         sql = f"""select
         col.column_name,
         col.data_type,
@@ -113,39 +145,61 @@ class PgSQLEngine(EngineBase):
         information_schema.columns col left join pg_description des on
         col.table_name::regclass = des.objoid
         and col.ordinal_position = des.objsubid
-        where table_name = '{tb_name}'
+        where table_name = %(tb_name)s
+        and col.table_schema = %(schema_name)s
         order by ordinal_position;"""
-        result = self.query(db_name=db_name, schema_name=schema_name,sql=sql)
+        result = self.query(
+            db_name=db_name,
+            schema_name=schema_name,
+            sql=sql,
+            parameters={"schema_name": schema_name, "tb_name": tb_name},
+        )
         return result
 
-    def query_check(self, db_name=None, sql=''):
+    def query_check(self, db_name=None, sql=""):
         # 查询语句的检查、注释去除、切分
-        result = {'msg': '', 'bad_query': False, 'filtered_sql': sql, 'has_star': False}
+        result = {"msg": "", "bad_query": False, "filtered_sql": sql, "has_star": False}
         # 删除注释语句，进行语法判断，执行第一条有效sql
         try:
             sql = sqlparse.format(sql, strip_comments=True)
             sql = sqlparse.split(sql)[0]
-            result['filtered_sql'] = sql.strip()
+            result["filtered_sql"] = sql.strip()
         except IndexError:
-            result['bad_query'] = True
-            result['msg'] = '没有有效的SQL语句'
+            result["bad_query"] = True
+            result["msg"] = "没有有效的SQL语句"
         if re.match(r"^select", sql, re.I) is None:
-            result['bad_query'] = True
-            result['msg'] = '不支持的查询语法类型!'
-        if '*' in sql:
-            result['has_star'] = True
-            result['msg'] = 'SQL语句中含有 * '
+            result["bad_query"] = True
+            result["msg"] = "不支持的查询语法类型!"
+        if "*" in sql:
+            result["has_star"] = True
+            result["msg"] = "SQL语句中含有 * "
         return result
 
-    def _query(self, db_name=None, sql='', limit_num=0, schema_name=None, close_conn=True):
-        """返回 ResultSet """
+    def query(
+        self,
+        db_name=None,
+        sql="",
+        limit_num=0,
+        close_conn=True,
+        parameters=None,
+        **kwargs,
+    ):
+        """返回 ResultSet"""
+        schema_name = kwargs.get("schema_name")
         result_set = ResultSet(full_sql=sql)
         try:
             conn = self.get_connection(db_name=db_name)
+            max_execution_time = kwargs.get("max_execution_time", 0)
             cursor = conn.cursor()
+            try:
+                cursor.execute(f"SET statement_timeout TO {max_execution_time};")
+            except:
+                pass
             if schema_name:
-                cursor.execute(f"SET search_path TO {schema_name};")
-            cursor.execute(sql)
+                cursor.execute(
+                    f"SET search_path TO %(schema_name)s;", {"schema_name": schema_name}
+                )
+            cursor.execute(sql, parameters)
             effect_row = cursor.rowcount
             if int(limit_num) > 0:
                 rows = cursor.fetchmany(size=int(limit_num))
@@ -164,68 +218,76 @@ class PgSQLEngine(EngineBase):
                 self.close()
         return result_set
 
-    def query(self, db_name=None, sql='', limit_num=0, schema_name=None, close_conn=True):
-        if not db_name:
-            raise ValueError('db_name未填写,请检查参数')
-        return self._query(db_name=db_name, sql=sql, limit_num=limit_num, schema_name=schema_name, close_conn=close_conn)
-
-    def filter_sql(self, sql='', limit_num=0):
+    def filter_sql(self, sql="", limit_num=0):
         # 对查询sql增加limit限制，# TODO limit改写待优化
-        sql_lower = sql.lower().rstrip(';').strip()
+        sql_lower = sql.lower().rstrip(";").strip()
         if re.match(r"^select", sql_lower):
             if re.search(r"limit\s+(\d+)$", sql_lower) is None:
                 if re.search(r"limit\s+\d+\s*,\s*(\d+)$", sql_lower) is None:
                     return f"{sql.rstrip(';')} limit {limit_num};"
         return f"{sql.rstrip(';')};"
 
-    def query_masking(self, db_name=None, sql='', resultset=None):
-        """不做脱敏"""
-        return resultset
+    def query_masking(self, db_name=None, sql="", resultset=None):
+        """简单字段脱敏规则, 仅对select有效"""
+        if re.match(r"^select", sql, re.I):
+            filtered_result = simple_column_mask(self.instance, resultset)
+            filtered_result.is_masked = True
+        else:
+            filtered_result = resultset
+        return filtered_result
 
-    def execute_check(self, db_name=None, sql=''):
+    def execute_check(self, db_name=None, sql=""):
         """上线单执行前的检查, 返回Review set"""
         config = SysConfig()
         check_result = ReviewSet(full_sql=sql)
         # 禁用/高危语句检查
         line = 1
-        critical_ddl_regex = config.get('critical_ddl_regex', '')
+        critical_ddl_regex = config.get("critical_ddl_regex", "")
         p = re.compile(critical_ddl_regex)
         check_result.syntax_type = 2  # TODO 工单类型 0、其他 1、DDL，2、DML
         for statement in sqlparse.split(sql):
             statement = sqlparse.format(statement, strip_comments=True)
             # 禁用语句
             if re.match(r"^select", statement.lower()):
-                check_result.is_critical = True
-                result = ReviewResult(id=line, errlevel=2,
-                                      stagestatus='驳回不支持语句',
-                                      errormessage='仅支持DML和DDL语句，查询语句请使用SQL查询功能！',
-                                      sql=statement)
+                result = ReviewResult(
+                    id=line,
+                    errlevel=2,
+                    stagestatus="驳回不支持语句",
+                    errormessage="仅支持DML和DDL语句，查询语句请使用SQL查询功能！",
+                    sql=statement,
+                )
             # 高危语句
             elif critical_ddl_regex and p.match(statement.strip().lower()):
-                check_result.is_critical = True
-                result = ReviewResult(id=line, errlevel=2,
-                                      stagestatus='驳回高危SQL',
-                                      errormessage='禁止提交匹配' + critical_ddl_regex + '条件的语句！',
-                                      sql=statement)
+                result = ReviewResult(
+                    id=line,
+                    errlevel=2,
+                    stagestatus="驳回高危SQL",
+                    errormessage="禁止提交匹配" + critical_ddl_regex + "条件的语句！",
+                    sql=statement,
+                )
 
             # 正常语句
             else:
-                result = ReviewResult(id=line, errlevel=0,
-                                      stagestatus='Audit completed',
-                                      errormessage='None',
-                                      sql=statement,
-                                      affected_rows=0,
-                                      execute_time=0, )
+                result = ReviewResult(
+                    id=line,
+                    errlevel=0,
+                    stagestatus="Audit completed",
+                    errormessage="None",
+                    sql=statement,
+                    affected_rows=0,
+                    execute_time=0,
+                )
             # 判断工单类型
-            if get_syntax_type(statement) == 'DDL':
+            if get_syntax_type(statement) == "DDL":
                 check_result.syntax_type = 1
             check_result.rows += [result]
-
-            # 遇到禁用和高危语句直接返回，提高效率
-            if check_result.is_critical:
-                check_result.error_count += 1
-                return check_result
             line += 1
+        # 统计警告和错误数量
+        for r in check_result.rows:
+            if r.errlevel == 1:
+                check_result.warning_count += 1
+            if r.errlevel == 2:
+                check_result.error_count += 1
         return check_result
 
     def execute_workflow(self, workflow, close_conn=True):
@@ -243,51 +305,58 @@ class PgSQLEngine(EngineBase):
             cursor = conn.cursor()
             # 逐条执行切分语句，追加到执行结果中
             for statement in split_sql:
-                statement = statement.rstrip(';')
+                statement = statement.rstrip(";")
                 with FuncTimer() as t:
                     cursor.execute(statement)
                     conn.commit()
-                execute_result.rows.append(ReviewResult(
-                    id=line,
-                    errlevel=0,
-                    stagestatus='Execute Successfully',
-                    errormessage='None',
-                    sql=statement,
-                    affected_rows=cursor.rowcount,
-                    execute_time=t.cost,
-                ))
+                execute_result.rows.append(
+                    ReviewResult(
+                        id=line,
+                        errlevel=0,
+                        stagestatus="Execute Successfully",
+                        errormessage="None",
+                        sql=statement,
+                        affected_rows=cursor.rowcount,
+                        execute_time=t.cost,
+                    )
+                )
                 line += 1
         except Exception as e:
-            logger.warning(f"PGSQL命令执行报错，语句：{statement or sql}， 错误信息：{traceback.format_exc()}")
+            logger.warning(
+                f"PGSQL命令执行报错，语句：{statement or sql}， 错误信息：{traceback.format_exc()}"
+            )
             execute_result.error = str(e)
             # 追加当前报错语句信息到执行结果中
-            execute_result.rows.append(ReviewResult(
-                id=line,
-                errlevel=2,
-                stagestatus='Execute Failed',
-                errormessage=f'异常信息：{e}',
-                sql=statement or sql,
-                affected_rows=0,
-                execute_time=0,
-            ))
-            line += 1
-            # 报错语句后面的语句标记为审核通过、未执行，追加到执行结果中
-            for statement in split_sql[line - 1:]:
-                execute_result.rows.append(ReviewResult(
+            execute_result.rows.append(
+                ReviewResult(
                     id=line,
-                    errlevel=0,
-                    stagestatus='Audit completed',
-                    errormessage=f'前序语句失败, 未执行',
-                    sql=statement,
+                    errlevel=2,
+                    stagestatus="Execute Failed",
+                    errormessage=f"异常信息：{e}",
+                    sql=statement or sql,
                     affected_rows=0,
                     execute_time=0,
-                ))
+                )
+            )
+            line += 1
+            # 报错语句后面的语句标记为审核通过、未执行，追加到执行结果中
+            for statement in split_sql[line - 1 :]:
+                execute_result.rows.append(
+                    ReviewResult(
+                        id=line,
+                        errlevel=0,
+                        stagestatus="Audit completed",
+                        errormessage=f"前序语句失败, 未执行",
+                        sql=statement,
+                        affected_rows=0,
+                        execute_time=0,
+                    )
+                )
                 line += 1
         finally:
             if close_conn:
                 self.close()
         return execute_result
-
 
     def close(self):
         if self.conn:

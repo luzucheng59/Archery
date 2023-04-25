@@ -22,37 +22,29 @@ services:
       MYSQL_DATABASE: archery
       MYSQL_ROOT_PASSWORD: 123456
 
-  inception:
-    image: hhyo/inception
-    container_name: inception
-    restart: always
-    expose:
-      - "6669"
-    volumes:
-      - "./inception/inc.cnf:/etc/inc.cnf"
-
   goinception:
     image: hanchuanchuan/goinception
     container_name: goinception
     restart: always
-    expose:
-      - "4000"
+    ports:
+      - "4000:4000"
     volumes:
       - "./inception/config.toml:/etc/config.toml"
 
   archery:
-    image: hhyo/archery:1.7.4
+    image: hhyo/archery:v1.9.1
     container_name: archery
     restart: always
     ports:
       - "9123:9123"
     volumes:
-      - "./archery/settings.py:/opt/archery/archery/settings.py"
+      - "./archery/settings.py:/opt/archery/local_settings.py"
       - "./archery/soar.yaml:/etc/soar.yaml"
       - "./archery/docs.md:/opt/archery/docs/docs.md"
       - "./archery/downloads:/opt/archery/downloads"
       - "./archery/sql/migrations:/opt/archery/sql/migrations"
       - "./archery/logs:/opt/archery/logs"
+      - "./archery/keys:/opt/archery/keys"
     entrypoint: "dockerize -wait tcp://mysql:3306 -wait tcp://redis:6379 -timeout 60s /opt/archery/src/docker/startup.sh"
-    environment:
-      NGINX_PORT: 9123
+    env_file:
+      - .env

@@ -149,6 +149,11 @@
                     $.each(row, function (key, value) {
                         if (key === 'sql') {
                             var sql = window.sqlFormatter.format(value);
+                            //替换标签
+                            sql = sql.replace(/&/g, "&amp;");
+                            sql = sql.replace(/</g, "&lt;");
+                            sql = sql.replace(/>/g, "&gt;");
+                            sql = sql.replace(/"/g, "&quot;");
                             //替换所有的换行符
                             sql = sql.replace(/\r\n/g, "<br>");
                             sql = sql.replace(/\n/g, "<br>");
@@ -193,9 +198,7 @@
                     $('#sql-upload').fileinput('enable');
                     sessionStorage.setItem('analyze_text', text);
                 },
-                onLoadError: function () {
-                    alert("数据加载失败！请检查接口返回信息和错误日志！");
-                },
+                onLoadError: onLoadErrorCallback,
                 responseHandler: function (res) {
                     //在ajax获取到数据，渲染表格之前，修改数据源
                     return res;
@@ -333,17 +336,17 @@
                         title: '分析报告',
                         field: 'operation',
                         formatter: function (value, row, index) {
-                            return "<button class=\"btn btn-info btn-xs\" report=\"" + row.report + "\"\n" + "onclick=\"getReport(this)\" >查看\n" + "</button>"
+                            return "<button class=\"btn btn-info btn-xs\" report=\"" + row.report.replace(/"<>\.*/gm,'<\>才是标准SQL中的不等于运算符') + "\"\n" + "onclick=\"getReport(this)\" >查看\n" + "</button>"
                         }
                     }],
                     onLoadSuccess: function () {
                         $('#btn-analyze').removeClass('disabled');
                         $('#btn-analyze').prop('disabled', false);
                     },
-                    onLoadError: function () {
+                    onLoadError: function (status, jqXHR) {
                         $('#btn-analyze').removeClass('disabled');
                         $('#btn-analyze').prop('disabled', false);
-                        alert("数据加载失败！请检查接口返回信息和错误日志！");
+                        onLoadErrorCallback(status, jqXHR);
                     },
                     responseHandler: function (res) {
                         //在ajax获取到数据，渲染表格之前，修改数据源

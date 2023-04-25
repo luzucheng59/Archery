@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load format_tags %}
 
 {% block content %}
     <div class="row clearfix">
@@ -30,6 +31,8 @@
                                     {{ WorkflowDict.workflow_type.sqlreview_display }}</option>
                                 <option value="{{ WorkflowDict.workflow_type.query }}">
                                     {{ WorkflowDict.workflow_type.query_display }}</option>
+                                <option value="{{ WorkflowDict.workflow_type.archive }}">
+                                    {{ WorkflowDict.workflow_type.archive_display }}</option>
                             </select>
                         </div>
                         <h5 class="control-label text-bold">组：</h5>
@@ -53,28 +56,10 @@
                 </div>
                 <div class="panel-body">
                     <div id="div-system-config" class="form-group" style="display: none">
-                        <h4 style="color: darkgrey; display: inline;"><b>Inception配置</b></h4>&nbsp;&nbsp;&nbsp;
-                        <button id='check_goincption' class='btn-sm btn-info'>测试goInception连接</button>&nbsp;
-                        <button id='check_incption' class='btn-sm btn-info'>测试Inception连接</button>
-                        <h6 style="color:red">注：默认使用goInception进行MySQL的审核执行，Inception作为脱敏解析工具使用</h6>
+                        <h4 style="color: darkgrey; display: inline;"><b>goInception配置</b></h4>&nbsp;&nbsp;&nbsp;
+                        <h6 style="color:red">注1：备份库的信息仅用于平台获取回滚语句，需要和审核工具自身的配置保持一致，此处配置变更不会修改审核工具自身的配置</h6>
                         <hr/>
                         <div class="form-horizontal">
-                            <div class="form-group">
-                                <label for="inception"
-                                       class="col-sm-4 control-label">INCEPTION</label>
-                                <div class="col-sm-8">
-                                    <div class="switch switch-small">
-                                        <label>
-                                            <input id="inception"
-                                                   key="inception"
-                                                   value="{{ config.inception }}"
-                                                   type="checkbox">
-                                            是否切换为Inception审核
-                                        </label>
-                                    </div>
-                                </div>
-                            </div>
-
                             <div id="div-go-inception-config">
                                 <div class="form-group">
                                     <label for="go_inception_host"
@@ -86,6 +71,7 @@
                                                value="{{ config.go_inception_host }}"
                                                placeholder="goInception地址">
                                     </div>
+                                    <button id='check_goincption' class='btn-sm btn-info'>测试连接</button>&nbsp;
                                 </div>
                                 <div class="form-group">
                                     <label for="go_inception_port"
@@ -99,72 +85,48 @@
                                     </div>
                                 </div>
                             </div>
-                            <div id="div-inception-config">
-                                <div class="form-group">
-                                    <label for="inception_host"
-                                           class="col-sm-4 control-label">INCEPTION_HOST</label>
-                                    <div class="col-sm-5">
-                                        <input type="text" class="form-control"
-                                               id="inception_host"
-                                               key="inception_host"
-                                               value="{{ config.inception_host }}"
-                                               placeholder="Inception地址">
-                                    </div>
+                            <div class="form-group">
+                                <label for="inception_remote_backup_host"
+                                       class="col-sm-4 control-label">BACKUP_HOST</label>
+                                <div class="col-sm-5">
+                                    <input type="text" class="form-control"
+                                           id="inception_remote_backup_host"
+                                           key="inception_remote_backup_host"
+                                           value="{{ config.inception_remote_backup_host }}"
+                                           placeholder="备份库地址">
                                 </div>
-                                <div class="form-group">
-                                    <label for="inception_port"
-                                           class="col-sm-4 control-label">INCEPTION_PORT</label>
-                                    <div class="col-sm-5">
-                                        <input type="number" class="form-control"
-                                               id="inception_port"
-                                               key="inception_port"
-                                               value="{{ config.inception_port }}"
-                                               placeholder="Inception端口">
-                                    </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="inception_remote_backup_port"
+                                       class="col-sm-4 control-label">BACKUP_PORT</label>
+                                <div class="col-sm-5">
+                                    <input type="number" class="form-control"
+                                           id="inception_remote_backup_port"
+                                           key="inception_remote_backup_port"
+                                           value="{{ config.inception_remote_backup_port }}"
+                                           placeholder="备份库端口">
                                 </div>
-                                <div class="form-group">
-                                    <label for="inception_remote_backup_host"
-                                           class="col-sm-4 control-label">REMOTE_BACKUP_HOST</label>
-                                    <div class="col-sm-5">
-                                        <input type="text" class="form-control"
-                                               id="inception_remote_backup_host"
-                                               key="inception_remote_backup_host"
-                                               value="{{ config.inception_remote_backup_host }}"
-                                               placeholder="备份库地址(Inception/goInception复用)">
-                                    </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="inception_remote_backup_user"
+                                       class="col-sm-4 control-label">BACKUP_USER</label>
+                                <div class="col-sm-5">
+                                    <input type="text" autocomplete="new-password" class="form-control"
+                                           id="inception_remote_backup_user"
+                                           key="inception_remote_backup_user"
+                                           value="{{ config.inception_remote_backup_user }}"
+                                           placeholder="备份库用户">
                                 </div>
-                                <div class="form-group">
-                                    <label for="inception_remote_backup_port"
-                                           class="col-sm-4 control-label">REMOTE_BACKUP_PORT</label>
-                                    <div class="col-sm-5">
-                                        <input type="number" class="form-control"
-                                               id="inception_remote_backup_port"
-                                               key="inception_remote_backup_port"
-                                               value="{{ config.inception_remote_backup_port }}"
-                                               placeholder="备份库端口(Inception/goInception复用)">
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="inception_remote_backup_user"
-                                           class="col-sm-4 control-label">REMOTE_BACKUP_USER</label>
-                                    <div class="col-sm-5">
-                                        <input type="text" autocomplete="new-password" class="form-control"
-                                               id="inception_remote_backup_user"
-                                               key="inception_remote_backup_user"
-                                               value="{{ config.inception_remote_backup_user }}"
-                                               placeholder="备份库用户(Inception/goInception复用)">
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="inception_remote_backup_password"
-                                           class="col-sm-4 control-label">REMOTE_BACKUP_PASSWORD</label>
-                                    <div class="col-sm-5">
-                                        <input type="password" autocomplete="new-password" class="form-control"
-                                               id="inception_remote_backup_password"
-                                               key="inception_remote_backup_password"
-                                               value="{{ config.inception_remote_backup_password }}"
-                                               placeholder="备份库用户密码(Inception/goInception复用)">
-                                    </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="inception_remote_backup_password"
+                                       class="col-sm-4 control-label">BACKUP_PASSWORD</label>
+                                <div class="col-sm-5">
+                                    <input type="password" autocomplete="new-password" class="form-control"
+                                           id="inception_remote_backup_password"
+                                           key="inception_remote_backup_password"
+                                           value="{{ config.inception_remote_backup_password }}"
+                                           placeholder="备份库用户密码">
                                 </div>
                             </div>
                         </div>
@@ -231,11 +193,37 @@
                                     <label for="auto_review_tag"
                                            class="col-sm-4 control-label">AUTO_REVIEW_TAG</label>
                                     <div class="col-sm-5">
-                                        <input type="text" class="form-control"
-                                               id="auto_review_tag"
-                                               key="auto_review_tag"
-                                               value="{{ config.auto_review_tag }}"
-                                               placeholder="自动审批的实例标签CODE，多个使用逗号分隔">
+                                        <select id="auto_review_tag" key="auto_review_tag"
+                                                class="form-control selectpicker" data-live-search="true"
+                                                multiple data-selected-text-format="count > 5"
+                                                data-none-selected-text="自动审批的实例标签">
+                                            {% for tag in instance_tags %}
+                                                {% if tag.tag_code|is_in:config.auto_review_tag %}
+                                                    <option value="{{ tag.tag_code }}"
+                                                            selected>{{ tag.tag_name }}</option>
+                                                {% else %}
+                                                    <option value="{{ tag.tag_code }}">{{ tag.tag_name }}</option>
+                                                {% endif %}
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="auto_review_db_type"
+                                           class="col-sm-4 control-label">AUTO_REVIEW_DB_TYPE</label>
+                                    <div class="col-sm-5">
+                                        <select id="auto_review_db_type" key="auto_review_db_type"
+                                                class="form-control selectpicker" data-live-search="true"
+                                                multiple data-selected-text-format="count > 5"
+                                                data-none-selected-text="自动审批的数据库类型">
+                                            {% for type in db_type %}
+                                                {% if type|is_in:config.auto_review_db_type %}
+                                                    <option value="{{ type }}" selected>{{ type }}</option>
+                                                {% else %}
+                                                    <option value="{{ type }}">{{ type }}</option>
+                                                {% endif %}
+                                            {% endfor %}
+                                        </select>
                                     </div>
                                 </div>
                                 <div class="form-group">
@@ -276,9 +264,39 @@
                                     </div>
                                 </div>
                             </div>
+                            <div class="form-group">
+                                <label for="ddl_dml_separation"
+                                       class="col-sm-4 control-label">DDL_DML_SEPARATION</label>
+                                <div class="col-sm-8">
+                                    <div class="switch switch-small">
+                                        <label>
+                                            <input id="ddl_dml_separation"
+                                                   key="ddl_dml_separation"
+                                                   value="{{ config.ddl_dml_separation }}"
+                                                   type="checkbox">
+                                            是否禁止DDL和DML在SQL上线同时提交(MySQL)
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="ban_self_audit"
+                                       class="col-sm-4 control-label">BAN_SELF_AUDIT</label>
+                                <div class="col-sm-8">
+                                    <div class="switch switch-small">
+                                        <label>
+                                            <input id="ban_self_audit"
+                                                   key="ban_self_audit"
+                                                   value="{{ config.ban_self_audit }}"
+                                                   type="checkbox">
+                                            是否允许工单审批人与提出人相同
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         <h5 style="color: darkgrey"><b>SQL查询</b></h5>
-                        <h6 style="color:red">注：开启脱敏功能必须要配置Inception信息，用于SQL语法解析</h6>
+                        <h6 style="color:red">注：开启脱敏功能必须要配置goInception信息，用于SQL语法解析</h6>
                         <hr/>
                         <div class="form-horizontal">
                             <div class="form-group">
@@ -324,7 +342,7 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label for="inception_remote_backup_port"
+                                <label for="max_execution_time"
                                        class="col-sm-4 control-label">MAX_EXECUTION_TIME</label>
                                 <div class="col-sm-5">
                                     <input type="number" class="form-control" id="max_execution_time"
@@ -381,11 +399,13 @@
                         </div>
                         <br>
                         <h4 style="color: darkgrey;display: inline"><b>通知配置</b></h4>&nbsp;&nbsp;&nbsp;
-                        <button id='check_email' class='btn-sm btn-info'>测试EMAIL连接</button>
                         <h6 style="color:red">注1：钉钉Webhook需要配置资源组Webhook地址，Webhook无法通知到指定用户</h6>
-                        <h6 style="color:red">注2：企业微信开启后，若未配置企业微信UserID，则默认取用户的username作为UserId</h6>
+                        <h6 style="color:red">注2：企业微信自建应用开启后，若未配置企业微信UserID，则默认取用户的username作为UserId</h6>
+                        <h6 style="color:red">注3：企业微信群机器人需要配置资源组webhook地址（企业微信群机器人是通知到群；企业微信自建应用是通过应用通知到指定人）</h6>
                         <hr/>
                         <div class="form-horizontal">
+                        <h5 style="color: darkgrey"><b>工单通知</b></h5>
+                            <hr/>
                             <div class="form-group">
                                 <label for="archery_base_url"
                                        class="col-sm-4 control-label">ARCHERY_BASE_URL</label>
@@ -398,6 +418,39 @@
                                 </div>
                             </div>
                             <div class="form-group">
+                                <label for="ddl_notify_auth_group"
+                                       class="col-sm-4 control-label">DDL_NOTIFY_AUTH_GROUP</label>
+                                <div class="col-sm-5">
+                                    <select id="ddl_notify_auth_group" key="ddl_notify_auth_group"
+                                            class="selectpicker show-tick form-control bs-select-hidden"
+                                            data-live-search="true"
+                                            data-none-selected-text="DDL工单通知权限组"
+                                            multiple data-selected-text-format="count > 3"
+                                            required>
+                                        {% for auth_group in auth_group_list %}
+                                            {% if auth_group.name|is_in:config.ddl_notify_auth_group %}
+                                                <option value="{{ auth_group.name }}"
+                                                        selected>{{ auth_group.name }}</option>
+                                            {% else %}
+                                                <option value="{{ auth_group.name }}">{{ auth_group.name }}</option>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="notify_phase_control"
+                                       class="col-sm-4 control-label">NOTIFY_PHASE_CONTROL</label>
+                                <div class="col-sm-5">
+                                    <select id="notify_phase_control" key="notify_phase_control"
+                                            class="selectpicker show-tick form-control bs-select-hidden"
+                                            data-live-search="true"
+                                            data-none-selected-text="工单通知分阶段控制"
+                                            multiple required>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group">
                                 <label for="mail"
                                        class="col-sm-4 control-label">MAIL</label>
                                 <div class="col-sm-8">
@@ -406,6 +459,7 @@
                                             <input id="mail" key="mail" value="{{ config.mail }}"
                                                    type="checkbox"> 是否开启邮件通知
                                         </label>
+                                        <button id='check_email' class='btn-sm btn-info'>测试连接</button>
                                     </div>
                                 </div>
                             </div>
@@ -465,17 +519,6 @@
                                                key="mail_smtp_password"
                                                value="{{ config.mail_smtp_password }}"
                                                placeholder="邮箱账号密码">
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="ddl_notify_auth_group"
-                                           class="col-sm-4 control-label">DDL_NOTIFY_AUTH_GROUP</label>
-                                    <div class="col-sm-5">
-                                        <input type="text" class="form-control"
-                                               id="ddl_notify_auth_group"
-                                               key="ddl_notify_auth_group"
-                                               value="{{ config.ddl_notify_auth_group }}"
-                                               placeholder="DDL工单通知权限组名，为空则不通知">
                                     </div>
                                 </div>
                             </div>
@@ -570,13 +613,13 @@
 
                             <div class="form-group">
                                 <label for="wx"
-                                       class="col-sm-4 control-label">企业微信</label>
+                                       class="col-sm-4 control-label">企业微信自建应用</label>
                                 <div class="col-sm-8">
                                     <div class="switch switch-small">
                                         <label>
                                             <input id="wx" key="wx"
                                                    value="{{ config.wx }}"
-                                                   type="checkbox"> 是否开启企业微信通知
+                                                   type="checkbox"> 是否开启企业微信自建应用通知
                                         </label>
                                     </div>
                                 </div>
@@ -623,38 +666,207 @@
                                     </div>
                                 </div>
                             </div>
-                        </div>
+                            <div class="form-group">
+                                <label for="qywx_webhook"
+                                       class="col-sm-4 control-label">企业微信群机器人</label>
+                                <div class="col-sm-8">
+                                    <div class="switch switch-small">
+                                        <label>
+                                            <input id="qywx_webhook" key="qywx_webhook"
+                                                   value="{{ config.qywx_webhook }}"
+                                                   type="checkbox"> 是否开启企业微信群机器人通知
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="feishu_webhook"
+                                       class="col-sm-4 control-label">飞书Webhook</label>
+                                <div class="col-sm-8">
+                                    <div class="switch switch-small">
+                                        <label>
+                                            <input id="feishu_webhook" key="feishu_webhook"
+                                                   value="{{ config.feishu_webhook }}"
+                                                   type="checkbox"> 是否开启飞书Webhook通知
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="feishu"
+                                       class="col-sm-4 control-label">飞书</label>
+                                <div class="col-sm-8">
+                                    <div class="switch switch-small">
+                                        <label>
+                                            <input id="feishu" key="feishu"
+                                                   value="{{ config.feishu }}"
+                                                   type="checkbox"> 是否开启飞书通知
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="div-feishu-config" style="display: none">
+                                <div class="form-group">
+                                    <i class="ace-icon fa fa-hand-o-right"></i>
+                                    创建飞书应用参考：<a target="_blank"
+                                                href="https://open.feishu.cn/document/uQjL04CN/ukzM04SOzQjL5MDN">飞书接入开发文档</a>
+                                    {#                                    &nbsp;&nbsp;&nbsp;<button id='sync_ding_user' class='btn-xs btn-warning'>同步用户#}
+                                    </button>
+                                </div>
+                                <div class="form-group">
+                                    <label for="feishu_appid"
+                                           class="col-sm-4 control-label">飞书应用AppID</label>
+                                    <div class="col-sm-5">
+                                        <input type="text" class="form-control"
+                                               id="feishu_appid"
+                                               key="feishu_appid"
+                                               value="{{ config.feishu_appid }}"
+                                               placeholder="飞书应用AppID">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="feishu_app_secret"
+                                           class="col-sm-4 control-label">飞书AppSecret</label>
+                                    <div class="col-sm-5">
+                                        <input type="text" class="form-control"
+                                               id="feishu_app_secret"
+                                               key="feishu_app_secret"
+                                               value="{{ config.feishu_app_secret }}"
+                                               placeholder="飞书AppSecret">
+                                    </div>
+                                </div>
+                            </div>
+                            <h5 style="color: darkgrey"><b>短信服务</b></h5>
+                            <hr/>
+                            <div class="form-group">
+                                <label for="sms_provider"
+                                       class="col-sm-4 control-label">短信服务提供商</label>
+                                <div class="col-sm-5">
+                                    <select id="sms_provider" key="sms_provider"
+                                            class="selectpicker show-tick form-control bs-select-hidden"
+                                            data-live-search="true"
+                                            data-none-selected-text="短信服务商"
+                                            required>
+                                    </select>
+                                </div>
+                            </div>
+                            <div id="aliyun_sms" style="display: none">
+                                <div class="form-group">
+                                    <label for="aliyun_access_key_id"
+                                           class="col-sm-4 control-label">ALIYUN_ACCESS_KEY_ID</label>
+                                    <div class="col-sm-5">
+                                        <input type="password" class="form-control"
+                                               id="aliyun_access_key_id"
+                                               key="aliyun_access_key_id"
+                                               value="{{ config.aliyun_access_key_id }}"
+                                               placeholder="阿里云访问密钥ID，用于标识用户">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="aliyun_access_key_secret"
+                                           class="col-sm-4 control-label">ALIYUN_ACCESS_KEY_SECRET</label>
+                                    <div class="col-sm-5">
+                                        <input type="password" class="form-control"
+                                               id="aliyun_access_key_secret"
+                                               key="aliyun_access_key_secret"
+                                               value="{{ config.aliyun_access_key_secret }}"
+                                               placeholder="阿里云访问密钥（AccessKey），用于验证用户的密钥">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="aliyun_sign_name"
+                                           class="col-sm-4 control-label">ALIYUN_SIGN_NAME</label>
+                                    <div class="col-sm-5">
+                                        <input type="text" class="form-control"
+                                               id="aliyun_sign_name"
+                                               key="aliyun_sign_name"
+                                               value="{{ config.aliyun_sign_name }}"
+                                               placeholder="短信签名，需为审核通过状态">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="aliyun_template_code"
+                                           class="col-sm-4 control-label">ALIYUN_TEMPLATE_CODE</label>
+                                    <div class="col-sm-5">
+                                        <input type="text" class="form-control"
+                                               id="aliyun_template_code"
+                                               key="aliyun_template_code"
+                                               value="{{ config.aliyun_template_code }}"
+                                               placeholder="短信模板Code，需为审核通过状态">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="aliyun_variable_name"
+                                           class="col-sm-4 control-label">ALIYUN_VARIABLE_NAME</label>
+                                    <div class="col-sm-5">
+                                        <input type="text" class="form-control"
+                                               id="aliyun_variable_name"
+                                               key="aliyun_variable_name"
+                                               value="{{ config.aliyun_variable_name }}"
+                                               placeholder="短信模板中的变量名，如：code">
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="tencent_sms" style="display: none">
+                                <div class="form-group">
+                                    <label for="tencent_secret_id"
+                                           class="col-sm-4 control-label">TENCENT_SECRET_ID</label>
+                                    <div class="col-sm-5">
+                                        <input type="password" class="form-control"
+                                               id="tencent_secret_id"
+                                               key="tencent_secret_id"
+                                               value="{{ config.tencent_secret_id }}"
+                                               placeholder="用于标识API调用者的身份">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tencent_secret_key"
+                                           class="col-sm-4 control-label">TENCENT_SECRET_KEY</label>
+                                    <div class="col-sm-5">
+                                        <input type="password" class="form-control"
+                                               id="tencent_secret_key"
+                                               key="tencent_secret_key"
+                                               value="{{ config.tencent_secret_key }}"
+                                               placeholder="用于加密签名字符串和服务器端验证签名字符串的密钥">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tencent_sign_name"
+                                           class="col-sm-4 control-label">TENCENT_SIGN_NAME</label>
+                                    <div class="col-sm-5">
+                                        <input type="text" class="form-control"
+                                               id="tencent_sign_name"
+                                               key="tencent_sign_name"
+                                               value="{{ config.tencent_sign_name }}"
+                                               placeholder="短信签名，需为审核通过状态">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tencent_template_id"
+                                           class="col-sm-4 control-label">TENCENT_TEMPLATE_ID</label>
+                                    <div class="col-sm-5">
+                                        <input type="text" class="form-control"
+                                               id="tencent_template_id"
+                                               key="tencent_template_id"
+                                               value="{{ config.tencent_template_id }}"
+                                               placeholder="短信模板ID，需为审核通过状态">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tencent_sdk_appid"
+                                           class="col-sm-4 control-label">TENCENT_SDK_APPID</label>
+                                    <div class="col-sm-5">
+                                        <input type="text" class="form-control"
+                                               id="tencent_sdk_appid"
+                                               key="tencent_sdk_appid"
+                                               value="{{ config.tencent_sdk_appid }}"
+                                               placeholder="短信应用ID">
+                                    </div>
+                                </div>
+                            </div>
                         <br>
-                        <h4 style="color: darkgrey"><b>其他配置</b></h4>
-                        <hr/>
-                        <h5 style="color: darkgrey"><b>阿里云认证信息</b></h5>
-                        <h6 style="color:red">注：实例关联RDS实例ID后，会调用RDS接口获取慢日志、进程、表空间，其中进程和表空间需要管理权限的key</h6>
-                        <hr/>
-                        <div class="form-horizontal">
-                            <div class="form-group">
-                                <label for="aliyun_ak"
-                                       class="col-sm-4 control-label">AccessKeyID</label>
-                                <div class="col-sm-5">
-                                    <input type="password" class="form-control"
-                                           id="aliyun_ak"
-                                           key="aliyun_ak"
-                                           value="{{ config.aliyun_ak }}"
-                                           placeholder="AccessKeyID">
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label for="aliyun_secret"
-                                       class="col-sm-4 control-label">AccessKeySecret</label>
-                                <div class="col-sm-5">
-                                    <input type="password" class="form-control"
-                                           id="aliyun_secret"
-                                           key="aliyun_secret"
-                                           value="{{ config.aliyun_secret }}"
-                                           placeholder="AccessKeySecret">
-                                </div>
-                            </div>
                         </div>
-                        <h5 style="color: darkgrey"><b>其他</b></h5>
+                        <h4 style="color: darkgrey"><b>其他配置</b></h4>
                         <hr/>
                         <div class="form-horizontal">
                             <div class="form-group">
@@ -669,47 +881,69 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label for="lock_time_threshold"
-                                       class="col-sm-4 control-label">SCHEMASYNC</label>
+                                <label for="my2sql"
+                                       class="col-sm-4 control-label">MY2SQL</label>
                                 <div class="col-sm-5">
                                     <input type="text" class="form-control"
-                                           id="schemasync"
-                                           key="schemasync"
-                                           value="{{ config.schemasync }}"
-                                           placeholder="schemasync调用路径">
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label for="lock_time_threshold"
-                                       class="col-sm-4 control-label">BINLOG2SQL</label>
-                                <div class="col-sm-5">
-                                    <input type="text" class="form-control"
-                                           id="binlog2sql"
-                                           key="binlog2sql"
-                                           value="{{ config.binlog2sql }}"
-                                           placeholder="binlog2sql调用路径，类似/opt/binlog2sql.py">
+                                           id="my2sql"
+                                           key="my2sql"
+                                           value="{{ config.my2sql }}"
+                                           placeholder="my2sql调用路径，类似/opt/archery/src/plugins/my2sql">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label for="default_auth_group"
                                        class="col-sm-4 control-label">DEFAULT_AUTH_GROUP</label>
                                 <div class="col-sm-5">
-                                    <input type="text" class="form-control"
-                                           id="default_auth_group"
-                                           key="default_auth_group"
-                                           value="{{ config.default_auth_group }}"
-                                           placeholder="默认权限组名，新用户首次登录自动关联, 老用户请手动配置">
+                                    <select id="default_auth_group" key="default_auth_group"
+                                            class="selectpicker show-tick form-control bs-select-hidden"
+                                            data-live-search="true"
+                                            data-none-selected-text="新用户首次登录自动关联权限组"
+                                            multiple data-selected-text-format="count > 3"
+                                            required>
+                                        {% for auth_group in auth_group_list %}
+                                            {% if auth_group.name|is_in:config.default_auth_group %}
+                                                <option value="{{ auth_group.name }}"
+                                                        selected>{{ auth_group.name }}</option>
+                                            {% else %}
+                                                <option value="{{ auth_group.name }}">{{ auth_group.name }}</option>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </select>
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label for="default_resource_group"
                                        class="col-sm-4 control-label">DEFAULT_RESOURCE_GROUP</label>
                                 <div class="col-sm-5">
-                                    <input type="text" class="form-control"
-                                           id="default_resource_group"
-                                           key="default_resource_group"
-                                           value="{{ config.default_resource_group }}"
-                                           placeholder="默认资源组名，新用户首次登录自动关联, 老用户请手动配置">
+                                    <select id="default_resource_group" key="default_resource_group"
+                                            class="selectpicker show-tick form-control bs-select-hidden"
+                                            data-live-search="true"
+                                            data-none-selected-text="新用户首次登录自动关联资源组"
+                                            multiple data-selected-text-format="count > 3"
+                                            required>
+                                        {% for resource_group in group_list %}
+                                            {% if resource_group.group_name|is_in:config.default_resource_group %}
+                                                <option value="{{ resource_group.group_name }}"
+                                                        selected>{{ resource_group.group_name }}</option>
+                                            {% else %}
+                                                <option value="{{ resource_group.group_name }}">{{ resource_group.group_name }}</option>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="api_user_whitelist"
+                                       class="col-sm-4 control-label">API_USER_WHITELIST</label>
+                                <div class="col-sm-5">
+                                    <select id="api_user_whitelist" key="api_user_whitelist"
+                                            class="selectpicker show-tick form-control bs-select-hidden"
+                                            data-live-search="true"
+                                            data-none-selected-text="API用户白名单"
+                                            multiple data-selected-text-format="count > 5"
+                                            required>
+                                    </select>
                                 </div>
                             </div>
                             <div class="form-group">
@@ -747,6 +981,32 @@
                                     </div>
                                 </div>
                             </div>
+                            <div class="form-group">
+                                <label for="watermark_enabled"
+                                       class="col-sm-4 control-label">WATERMARK_ENABLED</label>
+                                <div class="col-sm-8">
+                                    <div class="switch switch-small">
+                                        <label>
+                                            <input id="watermark_enabled" key="watermark_enabled"
+                                                   value="{{ config.watermark_enabled }}"
+                                                   type="checkbox"> 是否开启水印功能
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="enforce_2fa"
+                                       class="col-sm-4 control-label">ENFORCE_2FA</label>
+                                <div class="col-sm-8">
+                                    <div class="switch switch-small">
+                                        <label>
+                                            <input id="enforce_2fa" key="enforce_2fa"
+                                                   value="{{ config.enforce_2fa }}"
+                                                   type="checkbox"> 登录是否强制使用2FA
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         <div class="form-group">
                             <div class="col-sm-offset-4 col-sm-10">
@@ -767,11 +1027,10 @@
                                        disabled="disabled" style="width: 283px">
                             </div>
                             <div class="form-group">
-                                <select id="group_auditors" name="group"
+                                <select id="group_auditors" name="group" title="请选择审批权限组"
                                         class="selectpicker show-tick form-control bs-select-hidden"
                                         data-name="审批人" data-placeholder="审批人:" data-live-search="true"
                                         required>
-                                    <option value="is-empty" disabled="" selected="selected">添加审批权限组</option>
                                     {% for auth_group in auth_group_list %}
                                         <option value="{{ auth_group.name }}">{{ auth_group.name }}
                                     {% endfor %}
@@ -794,6 +1053,95 @@
     <link href="{% static 'bootstrap-switch/css/bootstrap-switch.min.css' %}" rel="stylesheet" type="text/css"/>
     <script src="{% static 'bootstrap-switch/js/bootstrap-switch.min.js' %}"></script>
     <script>
+
+        $(document).ready(function (){
+            // notify_phase_control参数处理
+            let cfg_value = "{{ config.notify_phase_control }}";
+            let phases = ['Apply', 'Pass', 'Execute', 'Cancel'];
+            // notify_phase_control未设置时默认全部开启
+            if (cfg_value === "") {
+                for (let i in phases) {
+                    let phase = "<option value=\"" + phases[i]+ "\" selected>" + phases[i] + "</option>"
+                    $("#notify_phase_control").append(phase)
+                }
+            } else {
+                for (let i=0;i<phases.length;i++) {
+                    let phase = "";
+                    let cfg_arr = cfg_value.split(',');
+                    if (cfg_arr.indexOf(phases[i]) >= 0) {
+                        phase = "<option value=\"" + phases[i]+ "\" selected>" + phases[i] + "</option>"
+                    } else {
+                        phase = "<option value=\"" + phases[i]+ "\">" + phases[i] + "</option>"
+                    }
+                    $("#notify_phase_control").append(phase)
+                }
+            }
+            $("#notify_phase_control").selectpicker('render');
+            $("#notify_phase_control").selectpicker('refresh');
+
+            // api_user_whitelist参数处理
+            let api_config = "{{ config.api_user_whitelist }}";
+            $.ajax({
+                type: "post",
+                url: "/user/list/",
+                dataType: "json",
+                success: function (data) {
+                    if (data.status === 0) {
+                        let users = data.data;
+                        let user_arr = api_config.split(',');
+                        for (let i=0;i<users.length;i++) {
+                            let user = "";
+                            if (user_arr.indexOf(users[i].id.toString()) >= 0) {
+                                user = "<option value=\"" + users[i].id+ "\" selected>" + users[i].display + "(" + users[i].username + ")</option>"
+                            } else {
+                                user = "<option value=\"" + users[i].id+ "\">" + users[i].display + "(" + users[i].username + ")</option>"
+                            }
+                            $("#api_user_whitelist").append(user)
+                            $("#api_user_whitelist").selectpicker('render');
+                            $("#api_user_whitelist").selectpicker('refresh');
+                        }
+                    } else {
+                        alert(data.msg);
+                    }
+                },
+                error: function (XMLHttpRequest, textStatus, errorThrown) {
+                    alert(errorThrown);
+                }
+            });
+
+            // sms_provider参数处理
+            function provider_display(provider) {
+                if (provider === 'disabled') {
+                    return '关闭'
+                } else if (provider === 'aliyun') {
+                    return '阿里云'
+                } else if (provider === 'tencent') {
+                    return '腾讯云'
+                }
+            }
+            let sms_provider = "{{ config.sms_provider }}";
+            if (sms_provider === 'disabled' || sms_provider === '') {
+                $("#aliyun_sms").hide();
+                $("#tencent_sms").hide();
+            } else if (sms_provider === 'aliyun') {
+                $("#aliyun_sms").show();
+                $("#tencent_sms").hide();
+            } else if (sms_provider === 'tencent') {
+                $("#aliyun_sms").hide();
+                $("#tencent_sms").show();
+            }
+            let providers = ['disabled', 'aliyun', 'tencent'];
+            for (let i=0;i<providers.length;i++) {
+                let provider;
+                if (providers[i] === sms_provider) {
+                    provider = "<option value=\"" + providers[i]+ "\" selected>" + provider_display(providers[i]) + "</option>"
+                } else {
+                    provider = "<option value=\"" + providers[i]+ "\">" + provider_display(providers[i]) + "</option>"
+                }
+                $("#sms_provider").append(provider)
+            }
+        })
+
         //配置项切换
         $("#config").change(function () {
             sessionStorage.setItem('config_type', $("#config").val());
@@ -801,7 +1149,7 @@
                 $("#div-system-config").show();
                 $("#div-workflow").hide();
                 $("#div-workflow-config").hide();
-                $('input[type="checkbox"]').each(function (i) {
+                $("#div-system-config").find('input[type="checkbox"]').each(function (i) {
                     if ($(this).val() === 'true') {
                         $(this).bootstrapSwitch('state', true);
                     } else {
@@ -818,28 +1166,37 @@
 
         // 系统设置checkbox事件
         $('input[type="checkbox"]').on('switchChange.bootstrapSwitch', function (event, state) {
+            let id = $(this).attr("id");
             if (state) {
                 $(this).val(true);
-                if ($(this).attr("id") === 'mail') {
+                if (id === 'mail') {
                     $("#div-mail-config").show();
-                } else if ($(this).attr("id") === 'ding_to_person') {
+                } else if (id === 'ding_to_person') {
                     $("#div-ding-config").show();
-                } else if ($(this).attr("id") === 'auto_review') {
+                } else if (id === 'auto_review') {
                     $("#div-auto-review-config").show();
-                } else if ($(this).attr("id") === 'wx') {
+                } else if (id === 'wx') {
                     $("#div-wx-config").show();
+                } else if (id === 'feishu') {
+                    $("#div-feishu-config").show();
+                } else if (id === 'data_masking') {
+                    $("#div-inception-config").show();
                 }
             } else {
                 $(this).val(false);
-                if ($(this).attr("id") === 'mail') {
+                if (id === 'mail') {
                     $("#mail_ssl").val(false);
                     $("#div-mail-config").hide();
-                } else if ($(this).attr("id") === 'ding_to_person') {
+                } else if (id === 'ding_to_person') {
                     $("#div-ding-config").hide();
-                } else if ($(this).attr("id") === 'auto_review') {
+                } else if (id === 'auto_review') {
                     $("#div-auto-review-config").hide();
-                } else if ($(this).attr("id") === 'wx') {
+                } else if (id === 'wx') {
                     $("#div-wx-config").hide();
+                } else if (id === 'feishu') {
+                    $("#div-feishu-config").hide();
+                } else if (id === 'data_masking') {
+                    $("#div-inception-config").hide();
                 }
             }
         });
@@ -864,6 +1221,9 @@
                 function () {
                     var config_item = $(this).attr("key");
                     var config_value = $(this).val();
+                    if (Array.isArray(config_value)) {
+                        config_value = config_value.join(',')
+                    }
                     configs.push({
                         key: config_item,
                         value: config_value
@@ -911,15 +1271,23 @@
             $('#group_auditors').selectpicker('refresh');
         });
 
+        // 重置权限组选择框状态
+        $("#group_auditors").on("reset", function () {
+            $('#group_auditors').selectpicker('val', []);
+            $(this).children().removeAttr("disabled");
+            $(this).selectpicker("refresh");
+        });
+
         // 清空审核人信息
         $("#btn-workflow-config-clean").click(function () {
+            $('#group_auditors').trigger("reset");
             $("#workflow_auditors_text").val('');
-            window.location.reload()
         });
 
         // 切换工单类型获取对应组负责人
         $("#workflow_type").change(function () {
             $("#div-workflow-config").show();
+            $('#group_auditors').trigger("reset");
             $("#workflow_auditors_text").val('');
             if ($("#group").val()) {
                 $.ajax({
@@ -1007,7 +1375,7 @@
                 },
                 success: function (data) {
                     if (data.status === 0) {
-                        alert('Inception和备份库测试连接成功，请点击保存生效！')
+                        alert('Inception测试连接成功，请点击页面下方的保存按钮生效！')
                     } else {
                         alert(data.msg);
                     }
@@ -1040,7 +1408,7 @@
                 },
                 success: function (data) {
                     if (data.status === 0) {
-                        alert('goInception和备份库测试连接成功，请点击保存生效！')
+                        alert('goInception和备份库测试连接成功，请点击页面下方的保存按钮生效！')
                     } else {
                         alert(data.msg);
                     }
@@ -1073,7 +1441,7 @@
                 },
                 success: function (data) {
                     if (data.status === 0) {
-                        alert('测试邮件已成功发送给当前用户，注意查收，请点击保存生效！')
+                        alert('测试邮件已成功发送给当前用户，注意查收，请点击页面下方的保存按钮生效！')
                     } else {
                         alert(data.msg);
                     }
@@ -1120,6 +1488,21 @@
                 }
             });
         });
+
+        // 短信服务商切换
+        $("#sms_provider").change(function () {
+            let provider = this.value;
+            if (provider === 'disabled') {
+                $("#aliyun_sms").hide();
+                $("#tencent_sms").hide();
+            } else if (provider === 'aliyun') {
+                $("#aliyun_sms").show();
+                $("#tencent_sms").hide();
+            } else if (provider === 'tencent') {
+                $("#aliyun_sms").hide();
+                $("#tencent_sms").show();
+            }
+        })
 
         //自动填充操作项
         $(document).ready(function () {

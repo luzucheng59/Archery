@@ -10,6 +10,7 @@
             <option value="0" selected="selected">全部</option>
             <option value="1">查询权限申请</option>
             <option value="2">SQL上线申请</option>
+            <option value="3">数据归档申请</option>
         </select>
     </div>
     <!-- 审核列表的表格-->
@@ -126,9 +127,7 @@
                 }],
                 onLoadSuccess: function () {
                 },
-                onLoadError: function () {
-                    alert("数据加载失败！请检查接口返回信息和错误日志！");
-                },
+                onLoadError: onLoadErrorCallback,
                 onSearch: function (e) {
                     //传搜索参数给服务器
                     queryParams(e)

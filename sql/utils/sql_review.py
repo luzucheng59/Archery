@@ -1,11 +1,13 @@
 import datetime
+import json
 import re
-import sqlparse
+from django.db import transaction
 
+from sql.engines.models import ReviewResult
 from sql.models import SqlWorkflow
 from common.config import SysConfig
 from sql.utils.resource_group import user_groups
-from sql.engines import get_engine
+from sql.utils.sql_utils import remove_comments
 
 
 def is_auto_review(workflow_id):
@@ -16,36 +18,37 @@ def is_auto_review(workflow_id):
     """
 
     workflow = SqlWorkflow.objects.get(id=workflow_id)
-    auto_review_tags = SysConfig().get('auto_review_tag', '').split(',')
+    auto_review_tags = SysConfig().get("auto_review_tag", "").split(",")
+    auto_review_db_type = SysConfig().get("auto_review_db_type", "").split(",")
     # TODO 这里也可以放到engine中实现，但是配置项可能会相对复杂
-    if workflow.instance.db_type == 'mysql' and workflow.instance.instancetag_set.filter(
-            tag_code__in=auto_review_tags).exists():
+    if (
+        workflow.instance.db_type in auto_review_db_type
+        and workflow.instance.instance_tag.filter(
+            tag_code__in=auto_review_tags
+        ).exists()
+    ):
         # 获取正则表达式
-        auto_review_regex = SysConfig().get('auto_review_regex',
-                                            '^alter|^create|^drop|^truncate|^rename|^delete')
+        auto_review_regex = SysConfig().get(
+            "auto_review_regex", "^alter|^create|^drop|^truncate|^rename|^delete"
+        )
         p = re.compile(auto_review_regex, re.I)
 
         # 判断是否匹配到需要手动审核的语句
         auto_review = True
-        sql_content = workflow.sqlworkflowcontent.sql_content
-        for statement in sqlparse.split(sql_content):
-            # 删除注释语句
-            statement = sqlparse.format(statement, strip_comments=True)
-            if p.match(statement.strip()):
+        all_affected_rows = 0
+        review_content = workflow.sqlworkflowcontent.review_content
+        for review_row in json.loads(review_content):
+            review_result = ReviewResult(**review_row)
+            # 去除SQL注释 https://github.com/hhyo/Archery/issues/949
+            sql = remove_comments(review_result.sql).replace("\n", "").replace("\r", "")
+            # 正则匹配
+            if p.match(sql):
                 auto_review = False
                 break
-            if auto_review:
-                # 更新影响行数加测,总语句影响行数超过指定数量则需要人工审核
-                review_engine = get_engine(instance=workflow.instance)
-                inception_review = review_engine.execute_check(db_name=workflow.db_name, sql=sql_content).to_dict()
-                all_affected_rows = 0
-                for review_result in inception_review:
-                    sql = review_result.get('sql', '')
-                    affected_rows = review_result.get('affected_rows', 0)
-                    if re.match(r"^update", sql.strip().lower()):
-                        all_affected_rows = all_affected_rows + int(affected_rows)
-                if int(all_affected_rows) > int(SysConfig().get('auto_review_max_update_rows', 50)):
-                    auto_review = False
+            # 影响行数加测, 总语句影响行数超过指定数量则需要人工审核
+            all_affected_rows += int(review_result.affected_rows)
+        if all_affected_rows > int(SysConfig().get("auto_review_max_update_rows", 50)):
+            auto_review = False
     else:
         auto_review = False
     return auto_review
@@ -60,17 +63,25 @@ def can_execute(user, workflow_id):
     :param workflow_id:
     :return:
     """
-    workflow_detail = SqlWorkflow.objects.get(id=workflow_id)
     result = False
-    # 只有审核通过和定时执行的数据才可以立即执行
-    if workflow_detail.status in ['workflow_review_pass', 'workflow_timingtask']:
-        # 当前登录用户有资源组粒度执行权限，并且为组内用户
-        group_ids = [group.group_id for group in user_groups(user)]
-        if workflow_detail.group_id in group_ids and user.has_perm('sql.sql_execute_for_resource_group'):
-            result = True
-        # 当前登录用户为提交人，并且有执行权限
-        if workflow_detail.engineer == user.username and user.has_perm('sql.sql_execute'):
-            result = True
+    # 保证工单当前是可执行状态
+    with transaction.atomic():
+        workflow_detail = SqlWorkflow.objects.select_for_update().get(id=workflow_id)
+        # 只有审核通过和定时执行的数据才可以立即执行
+        if workflow_detail.status not in [
+            "workflow_review_pass",
+            "workflow_timingtask",
+        ]:
+            return False
+    # 当前登录用户有资源组粒度执行权限，并且为组内用户
+    group_ids = [group.group_id for group in user_groups(user)]
+    if workflow_detail.group_id in group_ids and user.has_perm(
+        "sql.sql_execute_for_resource_group"
+    ):
+        result = True
+    # 当前登录用户为提交人，并且有执行权限
+    if workflow_detail.engineer == user.username and user.has_perm("sql.sql_execute"):
+        result = True
     return result
 
 
@@ -103,13 +114,17 @@ def can_timingtask(user, workflow_id):
     workflow_detail = SqlWorkflow.objects.get(id=workflow_id)
     result = False
     # 只有审核通过和定时执行的数据才可以执行
-    if workflow_detail.status in ['workflow_review_pass', 'workflow_timingtask']:
+    if workflow_detail.status in ["workflow_review_pass", "workflow_timingtask"]:
         # 当前登录用户有资源组粒度执行权限，并且为组内用户
         group_ids = [group.group_id for group in user_groups(user)]
-        if workflow_detail.group_id in group_ids and user.has_perm('sql.sql_execute_for_resource_group'):
+        if workflow_detail.group_id in group_ids and user.has_perm(
+            "sql.sql_execute_for_resource_group"
+        ):
             result = True
         # 当前登录用户为提交人，并且有执行权限
-        if workflow_detail.engineer == user.username and user.has_perm('sql.sql_execute'):
+        if workflow_detail.engineer == user.username and user.has_perm(
+            "sql.sql_execute"
+        ):
             result = True
     return result
 
@@ -117,8 +132,7 @@ def can_timingtask(user, workflow_id):
 def can_cancel(user, workflow_id):
     """
     判断用户当前是否是可终止，
-    审核中的工单，审核人和提交人可终止
-    审核通过但未执行的工单，有执行权限的用户终止
+    审核中、审核通过的的工单，审核人和提交人可终止
     :param user:
     :param workflow_id:
     :return:
@@ -126,13 +140,19 @@ def can_cancel(user, workflow_id):
     workflow_detail = SqlWorkflow.objects.get(id=workflow_id)
     result = False
     # 审核中的工单，审核人和提交人可终止
-    if workflow_detail.status == 'workflow_manreviewing':
+    if workflow_detail.status == "workflow_manreviewing":
         from sql.utils.workflow_audit import Audit
-        if Audit.can_review(user, workflow_id, 2) or user.username == workflow_detail.engineer:
-            result = True
-    # 审核通过但未执行的工单，执行人可以打回
-    if workflow_detail.status in ['workflow_review_pass', 'workflow_timingtask']:
-        result = True if can_execute(user, workflow_id) else False
+
+        return any(
+            [
+                Audit.can_review(user, workflow_id, 2),
+                user.username == workflow_detail.engineer,
+            ]
+        )
+    elif workflow_detail.status in ["workflow_review_pass", "workflow_timingtask"]:
+        return any(
+            [can_execute(user, workflow_id), user.username == workflow_detail.engineer]
+        )
     return result
 
 
@@ -149,7 +169,9 @@ def can_view(user, workflow_id):
     if user.is_superuser:
         result = True
     # 非管理员，拥有审核权限、资源组粒度执行权限的，可以查看组内所有工单
-    elif user.has_perm('sql.sql_review') or user.has_perm('sql.sql_execute_for_resource_group'):
+    elif user.has_perm("sql.sql_review") or user.has_perm(
+        "sql.sql_execute_for_resource_group"
+    ):
         # 先获取用户所在资源组列表
         group_list = user_groups(user)
         group_ids = [group.group_id for group in group_list]
@@ -165,8 +187,17 @@ def can_view(user, workflow_id):
 def can_rollback(user, workflow_id):
     """
     判断用户当前是否可以查看回滚信息，和工单详情保持一致
+    执行结束并且开启备份的工单可以查看回滚信息
     :param user:
     :param workflow_id:
     :return:
     """
-    return can_view(user, workflow_id)
+    workflow_detail = SqlWorkflow.objects.get(id=workflow_id)
+    result = False
+    # 执行结束并且开启备份的工单可以查看回滚信息
+    if workflow_detail.is_backup and workflow_detail.status in (
+        "workflow_finish",
+        "workflow_exception",
+    ):
+        return can_view(user, workflow_id)
+    return result
