@@ -28,8 +28,9 @@ class OracleEngine(EngineBase):
 
     def __init__(self, instance=None):
         super(OracleEngine, self).__init__(instance=instance)
-        self.service_name = instance.service_name
-        self.sid = instance.sid
+        if instance:
+            self.service_name = instance.service_name
+            self.sid = instance.sid
 
     def get_connection(self, db_name=None):
         if self.conn:
@@ -50,13 +51,9 @@ class OracleEngine(EngineBase):
             raise ValueError("sid 和 dsn 均未填写, 请联系管理页补充该实例配置.")
         return self.conn
 
-    @property
-    def name(self):
-        return "Oracle"
+    name = "Oracle"
 
-    @property
-    def info(self):
-        return "Oracle engine"
+    info = "Oracle engine"
 
     @property
     def auto_backup(self):
@@ -153,6 +150,20 @@ class OracleEngine(EngineBase):
             "DIP",
             "OJVMSYS",
             "LBACSYS",
+            "AUDSYS",
+            "DBSFWUSER",
+            "DVF",
+            "DVSYS",
+            "GGSYS",
+            "GSMADMIN_INTERNAL",
+            "GSMCATUSER",
+            "GSMUSER",
+            "REMOTE_SCHEDULER_AGENT",
+            "SYS$UMF",
+            "SYSBACKUP",
+            "SYSDG",
+            "SYSKM",
+            "SYSRAC",
         )
         schema_list = [row[0] for row in result.rows if row[0] not in sysschema]
         result.rows = schema_list
@@ -260,7 +271,7 @@ class OracleEngine(EngineBase):
                         WHERE
                             bcs.OWNER=:db_name
                             AND bcs.TABLE_NAME=:tb_name
-                        ORDER BY bcs.COLUMN_NAME"""
+                        ORDER BY bcs.COLUMN_ID"""
         _desc_data = self.query(
             db_name=db_name,
             sql=desc_sql,
@@ -272,6 +283,7 @@ class OracleEngine(EngineBase):
         """获取表格索引信息"""
         index_sql = f""" SELECT ais.INDEX_NAME "索引名称",
                                 ais.uniqueness "唯一性",
+                                cols.column_names "索引列名",
                                 ais.index_type "索引类型",
                                 ais.compression "压缩属性",
                                 ais.tablespace_name "表空间",
@@ -284,6 +296,20 @@ class OracleEngine(EngineBase):
                             left join DBA_PART_INDEXES pis
                                 on ais.owner = pis.owner
                                 and ais.index_name = pis.index_name
+                            left JOIN (SELECT 
+                                    ics.index_owner,
+                                    ics.index_name,
+                                    LISTAGG(ics.column_name, ', ') WITHIN GROUP (ORDER BY ics.column_position) AS column_names
+                                FROM 
+                                    dba_ind_columns ics
+                                GROUP BY 
+                                    ics.index_owner, ics.index_name
+                                    UNION ALL
+                                    select lobs.owner, lobs.index_name, lobs.column_name
+                                      from dba_lobs lobs
+                                    ) cols
+                                ON ais.owner = cols.index_owner
+                                AND ais.index_name = cols.index_name
                             WHERE
                                 ais.owner = :db_name
                                 AND ais.table_name = :tb_name"""
@@ -539,7 +565,7 @@ class OracleEngine(EngineBase):
             else:
                 return False
         elif re.match(r"^delete", sql):
-            table_name = re.match(r"^delete\s+from\s+([\w-]+)\s*", sql, re.M).group(1)
+            table_name = re.match(r"^delete\s(.+?)\s", sql, re.M).group(1)
             if "." not in table_name:
                 table_name = f"{schema_name}.{table_name}"
             table_name = table_name.upper()
@@ -593,10 +619,7 @@ class OracleEngine(EngineBase):
             conn = self.get_connection()
             cursor = conn.cursor()
             if db_name:
-                cursor.execute(
-                    f" ALTER SESSION SET CURRENT_SCHEMA = :db_name ",
-                    {"db_name": db_name},
-                )
+                conn.current_schema = db_name
             if re.match(r"^explain", sql, re.I):
                 sql = sql
             else:
@@ -614,7 +637,9 @@ class OracleEngine(EngineBase):
             else:
                 result["rows"] = rows[0]
         except Exception as e:
-            logger.warning(f"Oracle 语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}")
+            logger.warning(
+                f"Oracle 语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}"
+            )
             result["msg"] = str(e)
         finally:
             if close_conn:
@@ -647,16 +672,6 @@ class OracleEngine(EngineBase):
             result["msg"] = keyword_warning
         return result
 
-    def filter_sql(self, sql="", limit_num=0):
-        sql_lower = sql.lower()
-        # 对查询sql增加limit限制
-        if re.match(r"^select|^with", sql_lower) and not (
-            re.match(r"^select\s+sql_audit.", sql_lower)
-            and sql_lower.find(" sql_audit where rownum <= ") != -1
-        ):
-            sql = f"select sql_audit.* from ({sql.rstrip(';')}) sql_audit where rownum <= {limit_num}"
-        return sql.strip()
-
     def query(
         self,
         db_name=None,
@@ -672,10 +687,7 @@ class OracleEngine(EngineBase):
             conn = self.get_connection()
             cursor = conn.cursor()
             if db_name:
-                cursor.execute(
-                    f" ALTER SESSION SET CURRENT_SCHEMA = :db_name ",
-                    {"db_name": db_name},
-                )
+                conn.current_schema = db_name
             sql = sql.rstrip(";")
             # 支持oralce查询SQL执行计划语句
             if re.match(r"^explain", sql, re.I):
@@ -700,7 +712,9 @@ class OracleEngine(EngineBase):
             result_set.rows = [tuple(x) for x in rows]
             result_set.affected_rows = len(result_set.rows)
         except Exception as e:
-            logger.warning(f"Oracle 语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}")
+            logger.warning(
+                f"Oracle 语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}"
+            )
             result_set.error = str(e)
         finally:
             if close_conn:
@@ -760,7 +774,9 @@ class OracleEngine(EngineBase):
                         id=line,
                         errlevel=2,
                         stagestatus="驳回高危SQL",
-                        errormessage="禁止提交匹配" + critical_ddl_regex + "条件的语句！",
+                        errormessage="禁止提交匹配"
+                        + critical_ddl_regex
+                        + "条件的语句！",
                         sql=sqlitem.statement,
                     )
                 # 驳回未带where数据修改语句，如确实需做全部删除或更新，显示的带上where 1=1
@@ -872,7 +888,10 @@ class OracleEngine(EngineBase):
                                     )
                                 else:
                                     object_name_list.add(object_name)
-                                    if result_set["rows"] > 1000:
+                                    if (
+                                        result_set.get("rows", None)
+                                        and result_set["rows"] > 1000
+                                    ):
                                         result = ReviewResult(
                                             id=line,
                                             errlevel=1,
@@ -901,7 +920,10 @@ class OracleEngine(EngineBase):
                                             execute_time=0,
                                         )
                             else:
-                                if result_set["rows"] > 1000:
+                                if (
+                                    result_set.get("rows", None)
+                                    and result_set["rows"] > 1000
+                                ):
                                     result = ReviewResult(
                                         id=line,
                                         errlevel=1,
@@ -1098,6 +1120,7 @@ class OracleEngine(EngineBase):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
+            conn.current_schema = workflow.db_name
             # 获取执行工单时间，用于备份SQL的日志挖掘起始时间
             cursor.execute(f"alter session set nls_date_format='yyyy-mm-dd hh24:mi:ss'")
             cursor.execute(f"select sysdate from dual")
@@ -1423,7 +1446,9 @@ class OracleEngine(EngineBase):
             result_set.rows = [tuple(x) for x in rows]
             result_set.affected_rows = len(result_set.rows)
         except Exception as e:
-            logger.warning(f"Oracle 语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}")
+            logger.warning(
+                f"Oracle 语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}"
+            )
             result_set.error = str(e)
         finally:
             # 结束分析任务
@@ -1447,13 +1472,15 @@ class OracleEngine(EngineBase):
                 statement = statement.rstrip(";")
                 cursor.execute(statement, parameters or [])
         except Exception as e:
-            logger.warning(f"Oracle语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}")
+            logger.warning(
+                f"Oracle语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}"
+            )
             result.error = str(e)
         if close_conn:
             self.close()
         return result
 
-    def session_list(self, command_type):
+    def processlist(self, command_type, **kwargs):
         """获取会话信息"""
         base_sql = """select 
                        s.sid,

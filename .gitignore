@@ -1,5 +1,6 @@
 *.pyc
 *.swp
+.vscode/*
 *.lock
 *.log
 .idea/
@@ -14,3 +15,6 @@ sonar-project.properties
 .scannerwork
 .env
 local_settings.py
+src/docker-compose-dev
+.coverage
+archery_custom

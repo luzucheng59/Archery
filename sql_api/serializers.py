@@ -10,20 +10,21 @@ from sql.models import (
     ResourceGroup,
     WorkflowAudit,
     WorkflowLog,
+    QueryPrivilegesApply,
+    ArchiveConfig,
 )
 from django.contrib.auth.models import Group
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django_q.tasks import async_task
 from sql.engines import get_engine
-from sql.utils.workflow_audit import Audit
+from sql.utils.workflow_audit import Audit, get_auditor
 from sql.utils.resource_group import user_instances
-from sql.notify import notify_for_audit
-from common.utils.const import WorkflowDict
+from common.utils.const import WorkflowType, WorkflowStatus
 from common.config import SysConfig
 import traceback
 import logging
+from sql.offlinedownload import OffLineDownLoad
 
 logger = logging.getLogger("default")
 
@@ -248,6 +249,18 @@ class AliyunRdsSerializer(serializers.ModelSerializer):
         fields = ("id", "rds_dbinstanceid", "is_enable", "instance", "ak")
 
 
+class QueryPrivilegesApplySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QueryPrivilegesApply
+        fields = "__all__"
+
+
+class ArchiveConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ArchiveConfig
+        fields = "__all__"
+
+
 class InstanceResourceSerializer(serializers.Serializer):
     instance_id = serializers.IntegerField(label="实例id")
     resource_type = serializers.ChoiceField(
@@ -282,7 +295,9 @@ class ExecuteCheckSerializer(serializers.Serializer):
         try:
             Instance.objects.get(pk=instance_id)
         except Instance.DoesNotExist:
-            raise serializers.ValidationError({"errors": f"不存在该实例：{instance_id}"})
+            raise serializers.ValidationError(
+                {"errors": f"不存在该实例：{instance_id}"}
+            )
         return instance_id
 
     def get_instance(self):
@@ -364,14 +379,23 @@ class WorkflowContentSerializer(serializers.ModelSerializer):
         try:
             user_instances(user, tag_codes=["can_write"]).get(id=instance.id)
         except instance.DoesNotExist:
-            raise serializers.ValidationError({"errors": "你所在组未关联该实例！"})
+            if workflow_data["is_offline_export"]:
+                pass
+            else:
+                raise serializers.ValidationError({"errors": "你所在组未关联该实例！"})
 
         # 再次交给engine进行检测，防止绕过
         try:
             check_engine = get_engine(instance=instance)
-            check_result = check_engine.execute_check(
-                db_name=workflow_data["db_name"], sql=sql_content
-            )
+            sql_export = OffLineDownLoad()
+            if workflow_data["is_offline_export"]:
+                instance.sql_content = sql_content
+                instance.db_name = workflow_data["db_name"]
+                check_result = sql_export.pre_count_check(workflow=instance)
+            else:
+                check_result = check_engine.execute_check(
+                    db_name=workflow_data["db_name"], sql=sql_content
+                )
         except Exception as e:
             raise serializers.ValidationError({"errors": str(e)})
 
@@ -381,64 +405,42 @@ class WorkflowContentSerializer(serializers.ModelSerializer):
         )
         sys_config = SysConfig()
         if not sys_config.get("enable_backup_switch") and check_engine.auto_backup:
-            is_backup = True
-
-        # 按照系统配置确定是自动驳回还是放行
-        auto_review_wrong = sys_config.get(
-            "auto_review_wrong", ""
-        )  # 1表示出现警告就驳回，2和空表示出现错误才驳回
-        workflow_status = "workflow_manreviewing"
-        if check_result.warning_count > 0 and auto_review_wrong == "1":
-            workflow_status = "workflow_autoreviewwrong"
-        elif check_result.error_count > 0 and auto_review_wrong in ("", "1", "2"):
-            workflow_status = "workflow_autoreviewwrong"
+            if workflow_data["is_offline_export"]:
+                pass
+            else:
+                is_backup = True
 
         workflow_data.update(
-            status=workflow_status,
+            status="workflow_manreviewing",
             is_backup=is_backup,
             is_manual=0,
             syntax_type=check_result.syntax_type,
             engineer=user.username,
             engineer_display=user.display,
             group_name=group.group_name,
-            audit_auth_groups=Audit.settings(
-                workflow_data["group_id"], WorkflowDict.workflow_type["sqlreview"]
-            ),
+            audit_auth_groups="",
         )
         try:
             with transaction.atomic():
-                workflow = SqlWorkflow.objects.create(**workflow_data)
+                workflow = SqlWorkflow(**workflow_data)
                 validated_data["review_content"] = check_result.json()
+                workflow.save()
                 workflow_content = SqlWorkflowContent.objects.create(
                     workflow=workflow, **validated_data
                 )
-                # 自动审核通过了，才调用工作流
-                if workflow_status == "workflow_manreviewing":
-                    # 调用工作流插入审核信息, SQL上线权限申请workflow_type=2
-                    Audit.add(WorkflowDict.workflow_type["sqlreview"], workflow.id)
+                # 自动创建工作流
+                auditor = get_auditor(workflow=workflow)
+                auditor.create_audit()
         except Exception as e:
             logger.error(f"提交工单报错，错误信息：{traceback.format_exc()}")
             raise serializers.ValidationError({"errors": str(e)})
-        else:
-            # 自动审核通过且开启了Apply阶段通知参数才发送消息通知
-            is_notified = (
-                "Apply" in sys_config.get("notify_phase_control").split(",")
-                if sys_config.get("notify_phase_control")
-                else True
-            )
-            if workflow_status == "workflow_manreviewing" and is_notified:
-                # 获取审核信息
-                audit_id = Audit.detail_by_workflow_id(
-                    workflow_id=workflow.id,
-                    workflow_type=WorkflowDict.workflow_type["sqlreview"],
-                ).audit_id
-                async_task(
-                    notify_for_audit,
-                    audit_id=audit_id,
-                    timeout=60,
-                    task_name=f"sqlreview-submit-{workflow.id}",
-                )
-            return workflow_content
+        # 有时候提交后自动审批通过, 在这里改写一下 workflow 状态
+        if auditor.audit.current_status == WorkflowStatus.REJECTED:
+            auditor.workflow.status = "workflow_autoreviewwrong"
+        elif auditor.audit.current_status == WorkflowStatus.PASSED:
+            auditor.workflow.status = "workflow_review_pass"
+        auditor.workflow.save()
+        return workflow_content
 
     class Meta:
         model = SqlWorkflowContent
@@ -458,7 +460,8 @@ class AuditWorkflowSerializer(serializers.Serializer):
     workflow_id = serializers.IntegerField(label="工单id")
     audit_remark = serializers.CharField(label="审批备注")
     workflow_type = serializers.ChoiceField(
-        choices=[1, 2, 3], label="工单类型：1-查询权限申请，2-SQL上线申请，3-数据归档申请"
+        choices=WorkflowType.choices,
+        label="工单类型：1-查询权限申请，2-SQL上线申请，3-数据归档申请",
     )
     audit_type = serializers.ChoiceField(choices=["pass", "cancel"], label="审核类型")
 
@@ -509,7 +512,8 @@ class WorkflowAuditListSerializer(serializers.ModelSerializer):
 class WorkflowLogSerializer(serializers.Serializer):
     workflow_id = serializers.IntegerField(label="工单id")
     workflow_type = serializers.ChoiceField(
-        choices=[1, 2, 3], label="工单类型：1-查询权限申请，2-SQL上线申请，3-数据归档申请"
+        choices=[1, 2, 3],
+        label="工单类型：1-查询权限申请，2-SQL上线申请，3-数据归档申请",
     )
 
     def validate(self, attrs):
@@ -544,7 +548,9 @@ class ExecuteWorkflowSerializer(serializers.Serializer):
         choices=[2, 3], label="工单类型：1-查询权限申请，2-SQL上线申请，3-数据归档申请"
     )
     mode = serializers.ChoiceField(
-        choices=["auto", "manual"], label="执行模式：auto-线上执行，manual-已手动执行", required=False
+        choices=["auto", "manual"],
+        label="执行模式：auto-线上执行，manual-已手动执行",
+        required=False,
     )
 
     def validate(self, attrs):
@@ -563,7 +569,9 @@ class ExecuteWorkflowSerializer(serializers.Serializer):
             try:
                 Users.objects.get(username=engineer)
             except Users.DoesNotExist:
-                raise serializers.ValidationError({"errors": f"不存在该用户：{engineer}"})
+                raise serializers.ValidationError(
+                    {"errors": f"不存在该用户：{engineer}"}
+                )
 
         try:
             WorkflowAudit.objects.get(

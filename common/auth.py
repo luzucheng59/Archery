@@ -11,6 +11,7 @@ from django.contrib.auth.models import Group
 from django.http import HttpResponse, HttpResponseRedirect
 from django.urls import reverse
 
+from django.conf import settings
 from common.config import SysConfig
 from common.utils.ding_api import get_ding_user_id
 from sql.models import Users, ResourceGroup, TwoFactorAuthConfig
@@ -74,7 +75,11 @@ class ArcheryAuth(object):
                 init_user(authenticated_user)
                 return {"status": 0, "msg": "ok", "data": authenticated_user}
             else:
-                return {"status": 1, "msg": "用户名或密码错误，请重新输入！", "data": ""}
+                return {
+                    "status": 1,
+                    "msg": "用户名或密码错误，请重新输入！",
+                    "data": "",
+                }
         except:
             logger.error("验证用户密码时报错")
             logger.error(traceback.format_exc())
@@ -201,5 +206,11 @@ def sign_up(request):
 
 # 退出登录
 def sign_out(request):
+    user = request.user
     logout(request)
+    # 如果开启了钉钉认证，重定向到钉钉退出登录页面
+    if user.ding_user_id and settings.ENABLE_DINGDING:
+        return HttpResponseRedirect(
+            redirect_to="https://login.dingtalk.com/oauth2/logout"
+        )
     return HttpResponseRedirect(reverse("sql:login"))

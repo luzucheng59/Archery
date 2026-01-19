@@ -4,13 +4,14 @@ import traceback
 
 from django.db import close_old_connections, connection, transaction
 from django_redis import get_redis_connection
-from common.utils.const import WorkflowDict
+from common.utils.const import WorkflowStatus, WorkflowType
 from common.config import SysConfig
 from sql.engines.models import ReviewResult, ReviewSet
 from sql.models import SqlWorkflow
-from sql.notify import notify_for_execute
+from sql.notify import notify_for_execute, EventType
 from sql.utils.workflow_audit import Audit
 from sql.engines import get_engine
+from sql.offlinedownload import OffLineDownLoad
 
 logger = logging.getLogger("default")
 
@@ -30,7 +31,7 @@ def execute(workflow_id, user=None):
             )
     # 增加执行日志
     audit_id = Audit.detail_by_workflow_id(
-        workflow_id=workflow_id, workflow_type=WorkflowDict.workflow_type["sqlreview"]
+        workflow_id=workflow_id, workflow_type=WorkflowType.SQL_REVIEW
     ).audit_id
     Audit.add_log(
         audit_id=audit_id,
@@ -41,7 +42,10 @@ def execute(workflow_id, user=None):
         operator_display=user.display if user else "系统",
     )
     execute_engine = get_engine(instance=workflow_detail.instance)
-    return execute_engine.execute_workflow(workflow=workflow_detail)
+    if workflow_detail.is_offline_export:
+        return OffLineDownLoad().execute_offline_download(workflow=workflow_detail)
+    else:
+        return execute_engine.execute_workflow(workflow=workflow_detail)
 
 
 def execute_callback(task):
@@ -95,7 +99,7 @@ def execute_callback(task):
         workflow.sqlworkflowcontent.save()
     # 增加工单日志
     audit_id = Audit.detail_by_workflow_id(
-        workflow_id=workflow_id, workflow_type=WorkflowDict.workflow_type["sqlreview"]
+        workflow_id=workflow_id, workflow_type=WorkflowType.SQL_REVIEW
     ).audit_id
     Audit.add_log(
         audit_id=audit_id,

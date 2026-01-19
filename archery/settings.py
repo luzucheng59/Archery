@@ -19,8 +19,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 env = environ.Env(
     DEBUG=(bool, False),
-    ALLOWED_HOSTS=(List[str], ["*"]),
-    SECRET_KEY=(str, "hfusaf2m4ot#7)fkw#di2bu6(cv0@opwmafx5n#6=3d%x^hpl6"),
+    ALLOWED_HOSTS=(list, ["*"]),
+    SECRET_KEY=(
+        str,
+        "",
+    ),  # 参考 https://docs.djangoproject.com/zh-hans/4.0/ref/settings/#secret-key
     DATABASE_URL=(str, "mysql://root:@127.0.0.1:3306/archery"),
     CACHE_URL=(str, "redis://127.0.0.1:6379/0"),
     # 系统外部认证目前支持LDAP、OIDC、DINGDING三种，认证方式只能启用其中一种，如果启用多个，实际生效的只有一个，优先级LDAP > DINGDING > OIDC
@@ -35,9 +38,48 @@ env = environ.Env(
         dict,
         {"username": "cn", "display": "displayname", "email": "mail"},
     ),
+    OIDC_USER_ATTR_MAP=(
+        dict,
+        {"username": "preferred_username", "display": "name", "email": "email"},
+    ),
     Q_CLUISTER_SYNC=(bool, False),  # qcluster 同步模式, debug 时可以调整为 True
     # CSRF_TRUSTED_ORIGINS=subdomain.example.com,subdomain.example2.com subdomain.example.com
     CSRF_TRUSTED_ORIGINS=(list, []),
+    ENABLED_ENGINES=(
+        list,
+        [
+            "mysql",
+            "clickhouse",
+            "goinception",
+            "mssql",
+            "redis",
+            "pgsql",
+            "oracle",
+            "mongo",
+            "phoenix",
+            "odps",
+            "cassandra",
+            "doris",
+            "elasticsearch",
+            "opensearch",
+            "memcached",
+        ],
+    ),
+    ENABLED_NOTIFIERS=(
+        list,
+        [
+            "sql.notify:DingdingWebhookNotifier",
+            "sql.notify:DingdingPersonNotifier",
+            "sql.notify:FeishuWebhookNotifier",
+            "sql.notify:FeishuPersonNotifier",
+            "sql.notify:QywxWebhookNotifier",
+            "sql.notify:QywxToUserNotifier",
+            "sql.notify:MailNotifier",
+            "sql.notify:GenericWebhookNotifier",
+        ],
+    ),
+    CURRENT_AUDITOR=(str, "sql.utils.workflow_audit:AuditV2"),
+    PASSWORD_MIXIN_PATH=(str, "sql.plugins.password:DummyMixin"),
 )
 
 # SECURITY WARNING: keep the secret key used in production secret!
@@ -56,6 +98,32 @@ USE_X_FORWARDED_HOST = True
 
 # 请求限制
 DATA_UPLOAD_MAX_MEMORY_SIZE = 15728640
+
+AVAILABLE_ENGINES = {
+    "mysql": {"path": "sql.engines.mysql:MysqlEngine"},
+    "cassandra": {"path": "sql.engines.cassandra:CassandraEngine"},
+    "clickhouse": {"path": "sql.engines.clickhouse:ClickHouseEngine"},
+    "goinception": {"path": "sql.engines.goinception:GoInceptionEngine"},
+    "mssql": {"path": "sql.engines.mssql:MssqlEngine"},
+    "redis": {"path": "sql.engines.redis:RedisEngine"},
+    "pgsql": {"path": "sql.engines.pgsql:PgSQLEngine"},
+    "oracle": {"path": "sql.engines.oracle:OracleEngine"},
+    "mongo": {"path": "sql.engines.mongo:MongoEngine"},
+    "phoenix": {"path": "sql.engines.phoenix:PhoenixEngine"},
+    "odps": {"path": "sql.engines.odps:ODPSEngine"},
+    "doris": {"path": "sql.engines.doris:DorisEngine"},
+    "elasticsearch": {"path": "sql.engines.elasticsearch:ElasticsearchEngine"},
+    "opensearch": {"path": "sql.engines.elasticsearch:OpenSearchEngine"},
+    "memcached": {"path": "sql.engines.memcached:MemcachedEngine"},
+}
+
+ENABLED_NOTIFIERS = env("ENABLED_NOTIFIERS")
+
+ENABLED_ENGINES = env("ENABLED_ENGINES")
+
+CURRENT_AUDITOR = env("CURRENT_AUDITOR")
+
+PASSWORD_MIXIN_PATH = env("PASSWORD_MIXIN_PATH")
 
 # Application definition
 INSTALLED_APPS = (
@@ -245,7 +313,7 @@ SIMPLE_JWT = {
 ENABLE_OIDC = env("ENABLE_OIDC", False)
 if ENABLE_OIDC:
     INSTALLED_APPS += ("mozilla_django_oidc",)
-    MIDDLEWARE += ("mozilla_django_oidc.middleware.SessionRefresh",)
+    OIDC_USER_ATTR_MAP = env("OIDC_USER_ATTR_MAP")
     AUTHENTICATION_BACKENDS = (
         "common.authenticate.oidc_auth.OIDCAuthenticationBackend",
         "django.contrib.auth.backends.ModelBackend",
@@ -318,10 +386,40 @@ if ENABLE_LDAP:
     )  # 每次登录从ldap同步用户信息
     AUTH_LDAP_USER_ATTR_MAP = env("AUTH_LDAP_USER_ATTR_MAP")
 
+# CAS认证
+ENABLE_CAS = env("ENABLE_CAS", default=False)
+if ENABLE_CAS:
+    INSTALLED_APPS += ("django_cas_ng",)
+    MIDDLEWARE += ("django_cas_ng.middleware.CASMiddleware",)
+    AUTHENTICATION_BACKENDS = (
+        "django.contrib.auth.backends.ModelBackend",
+        "django_cas_ng.backends.CASBackend",
+    )
+
+    # CAS 的地址
+    CAS_SERVER_URL = env("CAS_SERVER_URL")
+    # CAS 版本
+    CAS_VERSION = env("CAS_VERSION")
+    # 存入所有 CAS 服务端返回的 User 数据。
+    CAS_APPLY_ATTRIBUTES_TO_USER = True
+    # 关闭浏览器退出登录
+    SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+    #  忽略  SSL  证书校验
+    CAS_VERIFY_SSL_CERTIFICATE = env("CAS_VERIFY_SSL_CERTIFICATE", default=False)
+    #  忽略来源验证
+    CAS_IGNORE_REFERER = True
+    # https请求问题
+    CAS_FORCE_SSL_SERVICE_URL = env("CAS_FORCE_SSL_SERVICE_URL", default=False)
+    CAS_RETRY_TIMEOUT = 1
+    CAS_RETRY_LOGIN = True
+    CAS_EXTRA_LOGIN_PARAMS = {"renew": True}
+    CAS_LOGOUT_COMPLETELY = True
+
 SUPPORTED_AUTHENTICATION = [
     ("LDAP", ENABLE_LDAP),
     ("DINGDING", ENABLE_DINGDING),
     ("OIDC", ENABLE_OIDC),
+    ("CAS", ENABLE_CAS),
 ]
 # 计算当前启用的外部认证方式数量
 ENABLE_AUTHENTICATION_COUNT = len(
@@ -330,7 +428,7 @@ ENABLE_AUTHENTICATION_COUNT = len(
 if ENABLE_AUTHENTICATION_COUNT > 0:
     if ENABLE_AUTHENTICATION_COUNT > 1:
         logger.warning(
-            "系统外部认证目前支持LDAP、DINGDING、OIDC三种，认证方式只能启用其中一种，如果启用多个，实际生效的只有一个，优先级LDAP > DINGDING > OIDC"
+            "系统外部认证目前支持LDAP、DINGDING、OIDC、CAS四种，认证方式只能启用其中一种，如果启用多个，实际生效的只有一个，优先级LDAP > DINGDING > OIDC > CAS"
         )
     authentication = ""  # 默认为空
     for name, enabled in SUPPORTED_AUTHENTICATION:
@@ -404,6 +502,9 @@ LOGGING = {
         # },
     },
 }
+
+# 在网站标题及登录页面追加此内容, 可用于多archery实例的区分。Archery后台也有相同配置，如都做了配置，以后台配置为准
+CUSTOM_TITLE_SUFFIX = env("CUSTOM_TITLE_SUFFIX", default="")
 
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 if not os.path.exists(MEDIA_ROOT):

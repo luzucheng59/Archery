@@ -16,8 +16,8 @@ class MssqlEngine(EngineBase):
     test_query = "SELECT 1"
 
     def get_connection(self, db_name=None):
-        connstr = """DRIVER=ODBC Driver 17 for SQL Server;SERVER={0},{1};UID={2};PWD={3};
-client charset = UTF-8;connect timeout=10;CHARSET={4};""".format(
+        connstr = """DRIVER=ODBC Driver 18 for SQL Server;SERVER={0},{1};UID={2};PWD={3};
+client charset = UTF-8;connect timeout=10;CHARSET={4};TrustServerCertificate=yes;""".format(
             self.host,
             self.port,
             self.user,
@@ -31,13 +31,9 @@ client charset = UTF-8;connect timeout=10;CHARSET={4};""".format(
         self.conn = pyodbc.connect(connstr)
         return self.conn
 
-    @property
-    def name(self):
-        return "MsSQL"
+    name = "MsSQL"
 
-    @property
-    def info(self):
-        return "MsSQL engine"
+    info = "MsSQL engine"
 
     def get_all_databases(self):
         """获取数据库列表, 返回一个ResultSet"""
@@ -320,6 +316,10 @@ then DATA_TYPE + '(' + convert(varchar(max), CHARACTER_MAXIMUM_LENGTH) + ')' els
         # 对查询sql增加limit限制
         if re.match(r"^select", sql_lower):
             if sql_lower.find(" top ") == -1:
+                if sql_lower.find(" distinct ") > 0:
+                    return sql_lower.replace(
+                        "distinct", "distinct top {}".format(limit_num)
+                    )
                 return sql_lower.replace("select", "select top {}".format(limit_num))
         return sql.strip()
 
@@ -352,7 +352,9 @@ then DATA_TYPE + '(' + convert(varchar(max), CHARACTER_MAXIMUM_LENGTH) + ')' els
             result_set.rows = [tuple(x) for x in rows]
             result_set.affected_rows = len(result_set.rows)
         except Exception as e:
-            logger.warning(f"MsSQL语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}")
+            logger.warning(
+                f"MsSQL语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}"
+            )
             result_set.error = str(e)
         finally:
             if close_conn:
@@ -420,7 +422,9 @@ then DATA_TYPE + '(' + convert(varchar(max), CHARACTER_MAXIMUM_LENGTH) + ')' els
             try:
                 cursor.execute(statement)
             except Exception as e:
-                logger.warning(f"Mssql命令执行报错，语句：{sql}， 错误信息：{traceback.format_exc()}")
+                logger.warning(
+                    f"Mssql命令执行报错，语句：{sql}， 错误信息：{traceback.format_exc()}"
+                )
                 execute_result.error = str(e)
                 execute_result.rows.append(
                     ReviewResult(

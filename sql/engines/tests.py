@@ -1,7 +1,7 @@
-import MySQLdb
 import json
 from datetime import timedelta, datetime
-from unittest.mock import patch, Mock, ANY
+from unittest.mock import MagicMock, patch, Mock, ANY
+from pytest_mock import MockerFixture
 
 import sqlparse
 from django.contrib.auth import get_user_model
@@ -12,14 +12,20 @@ from sql.engines import EngineBase
 from sql.engines.goinception import GoInceptionEngine
 from sql.engines.models import ResultSet, ReviewSet, ReviewResult
 from sql.engines.mssql import MssqlEngine
-from sql.engines.mysql import MysqlEngine
 from sql.engines.redis import RedisEngine
 from sql.engines.pgsql import PgSQLEngine
 from sql.engines.oracle import OracleEngine
 from sql.engines.mongo import MongoEngine
 from sql.engines.clickhouse import ClickHouseEngine
 from sql.engines.odps import ODPSEngine
-from sql.models import Instance, SqlWorkflow, SqlWorkflowContent
+from sql.models import (
+    DataMaskingColumns,
+    Instance,
+    SqlWorkflow,
+    SqlWorkflowContent,
+    Tunnel,
+)
+
 
 User = get_user_model()
 
@@ -194,6 +200,13 @@ class TestMssql(TestCase):
         check_result = new_engine.filter_sql(sql=banned_sql, limit_num=10)
         self.assertEqual(check_result, "select top 10 user from user_table")
 
+    def test_filter_sql_with_distinct(self):
+        new_engine = MssqlEngine(instance=self.ins1)
+        # 只抽查一个函数
+        banned_sql = "select distinct * from user_table"
+        check_result = new_engine.filter_sql(sql=banned_sql, limit_num=10)
+        self.assertEqual(check_result, "select distinct top 10 * from user_table")
+
     def test_execute_check(self):
         new_engine = MssqlEngine(instance=self.ins1)
         test_sql = (
@@ -237,482 +250,6 @@ class TestMssql(TestCase):
         self.assertEqual(2, len(execute_result.rows))
         mock_cursor.return_value.commit.assert_not_called()
         mock_cursor.return_value.rollback.assert_called()
-
-
-class TestMysql(TestCase):
-    def setUp(self):
-        self.ins1 = Instance(
-            instance_name="some_ins",
-            type="slave",
-            db_type="mysql",
-            host="some_host",
-            port=1366,
-            user="ins_user",
-            password="some_str",
-        )
-        self.ins1.save()
-        self.sys_config = SysConfig()
-        self.wf = SqlWorkflow.objects.create(
-            workflow_name="some_name",
-            group_id=1,
-            group_name="g1",
-            engineer_display="",
-            audit_auth_groups="some_group",
-            create_time=datetime.now() - timedelta(days=1),
-            status="workflow_finish",
-            is_backup=True,
-            instance=self.ins1,
-            db_name="some_db",
-            syntax_type=1,
-        )
-        SqlWorkflowContent.objects.create(workflow=self.wf)
-
-    def tearDown(self):
-        self.ins1.delete()
-        self.sys_config.purge()
-        SqlWorkflow.objects.all().delete()
-        SqlWorkflowContent.objects.all().delete()
-
-    @patch("MySQLdb.connect")
-    def test_engine_base_info(self, _conn):
-        new_engine = MysqlEngine(instance=self.ins1)
-        self.assertEqual(new_engine.name, "MySQL")
-        self.assertEqual(new_engine.info, "MySQL engine")
-
-    @patch("MySQLdb.connect")
-    def testGetConnection(self, connect):
-        new_engine = MysqlEngine(instance=self.ins1)
-        new_engine.get_connection()
-        connect.assert_called_once()
-
-    @patch("MySQLdb.connect")
-    def testQuery(self, connect):
-        cur = Mock()
-        connect.return_value.cursor = cur
-        cur.return_value.execute = Mock()
-        cur.return_value.fetchmany.return_value = (("v1", "v2"),)
-        cur.return_value.description = (
-            ("k1", "some_other_des"),
-            ("k2", "some_other_des"),
-        )
-        new_engine = MysqlEngine(instance=self.ins1)
-        query_result = new_engine.query(sql="some_str", limit_num=100)
-        cur.return_value.execute.assert_called()
-        cur.return_value.fetchmany.assert_called_once_with(size=100)
-        connect.return_value.close.assert_called_once()
-        self.assertIsInstance(query_result, ResultSet)
-
-    @patch.object(MysqlEngine, "query")
-    def testAllDb(self, mock_query):
-        db_result = ResultSet()
-        db_result.rows = [("db_1",), ("db_2",)]
-        mock_query.return_value = db_result
-        new_engine = MysqlEngine(instance=self.ins1)
-        dbs = new_engine.get_all_databases()
-        self.assertEqual(dbs.rows, ["db_1", "db_2"])
-
-    @patch.object(MysqlEngine, "query")
-    def testAllTables(self, mock_query):
-        table_result = ResultSet()
-        table_result.rows = [("tb_1", "some_des"), ("tb_2", "some_des")]
-        mock_query.return_value = table_result
-        new_engine = MysqlEngine(instance=self.ins1)
-        tables = new_engine.get_all_tables("some_db")
-        mock_query.assert_called_once_with(db_name="some_db", sql=ANY)
-        self.assertEqual(tables.rows, ["tb_1", "tb_2"])
-
-    @patch.object(MysqlEngine, "query")
-    def testAllColumns(self, mock_query):
-        db_result = ResultSet()
-        db_result.rows = [("col_1", "type"), ("col_2", "type2")]
-        mock_query.return_value = db_result
-        new_engine = MysqlEngine(instance=self.ins1)
-        dbs = new_engine.get_all_columns_by_tb("some_db", "some_tb")
-        self.assertEqual(dbs.rows, ["col_1", "col_2"])
-
-    @patch.object(MysqlEngine, "query")
-    def testDescribe(self, mock_query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        new_engine.describe_table("some_db", "some_db")
-        mock_query.assert_called_once()
-
-    def testQueryCheck(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        sql_without_limit = "-- 测试\n select user from usertable"
-        check_result = new_engine.query_check(db_name="some_db", sql=sql_without_limit)
-        self.assertEqual(check_result["filtered_sql"], "select user from usertable")
-
-    def test_query_check_wrong_sql(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        wrong_sql = "-- 测试"
-        check_result = new_engine.query_check(db_name="some_db", sql=wrong_sql)
-        self.assertDictEqual(
-            check_result,
-            {
-                "msg": "不支持的查询语法类型!",
-                "bad_query": True,
-                "filtered_sql": "-- 测试",
-                "has_star": False,
-            },
-        )
-
-    def test_query_check_update_sql(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        update_sql = "update user set id=0"
-        check_result = new_engine.query_check(db_name="some_db", sql=update_sql)
-        self.assertDictEqual(
-            check_result,
-            {
-                "msg": "不支持的查询语法类型!",
-                "bad_query": True,
-                "filtered_sql": "update user set id=0",
-                "has_star": False,
-            },
-        )
-
-    def test_filter_sql_with_delimiter(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        sql_without_limit = "select user from usertable;"
-        check_result = new_engine.filter_sql(sql=sql_without_limit, limit_num=100)
-        self.assertEqual(check_result, "select user from usertable limit 100;")
-
-    def test_filter_sql_without_delimiter(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        sql_without_limit = "select user from usertable"
-        check_result = new_engine.filter_sql(sql=sql_without_limit, limit_num=100)
-        self.assertEqual(check_result, "select user from usertable limit 100;")
-
-    def test_filter_sql_with_limit(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        sql_without_limit = "select user from usertable limit 10"
-        check_result = new_engine.filter_sql(sql=sql_without_limit, limit_num=1)
-        self.assertEqual(check_result, "select user from usertable limit 1;")
-
-    def test_filter_sql_with_limit_min(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        sql_without_limit = "select user from usertable limit 10"
-        check_result = new_engine.filter_sql(sql=sql_without_limit, limit_num=100)
-        self.assertEqual(check_result, "select user from usertable limit 10;")
-
-    def test_filter_sql_with_limit_offset(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        sql_without_limit = "select user from usertable limit 10 offset 100"
-        check_result = new_engine.filter_sql(sql=sql_without_limit, limit_num=1)
-        self.assertEqual(check_result, "select user from usertable limit 1 offset 100;")
-
-    def test_filter_sql_with_limit_nn(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        sql_without_limit = "select user from usertable limit 10, 100"
-        check_result = new_engine.filter_sql(sql=sql_without_limit, limit_num=1)
-        self.assertEqual(check_result, "select user from usertable limit 10,1;")
-
-    def test_filter_sql_upper(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        sql_without_limit = "SELECT USER FROM usertable LIMIT 10, 100"
-        check_result = new_engine.filter_sql(sql=sql_without_limit, limit_num=1)
-        self.assertEqual(check_result, "SELECT USER FROM usertable limit 10,1;")
-
-    def test_filter_sql_not_select(self):
-        new_engine = MysqlEngine(instance=self.ins1)
-        sql_without_limit = "show create table usertable;"
-        check_result = new_engine.filter_sql(sql=sql_without_limit, limit_num=1)
-        self.assertEqual(check_result, "show create table usertable;")
-
-    @patch("sql.engines.mysql.data_masking", return_value=ResultSet())
-    def test_query_masking(self, _data_masking):
-        query_result = ResultSet()
-        new_engine = MysqlEngine(instance=self.ins1)
-        masking_result = new_engine.query_masking(
-            db_name="archery", sql="select 1", resultset=query_result
-        )
-        self.assertIsInstance(masking_result, ResultSet)
-
-    @patch("sql.engines.mysql.data_masking", return_value=ResultSet())
-    def test_query_masking_not_select(self, _data_masking):
-        query_result = ResultSet()
-        new_engine = MysqlEngine(instance=self.ins1)
-        masking_result = new_engine.query_masking(
-            db_name="archery", sql="explain select 1", resultset=query_result
-        )
-        self.assertEqual(masking_result, query_result)
-
-    @patch("sql.engines.mysql.GoInceptionEngine")
-    def test_execute_check_select_sql(self, _inception_engine):
-        self.sys_config.set("goinception", "true")
-        sql = "select * from user"
-        inc_row = ReviewResult(
-            id=1,
-            errlevel=0,
-            stagestatus="Audit completed",
-            errormessage="None",
-            sql=sql,
-            affected_rows=0,
-            execute_time="",
-        )
-        row = ReviewResult(
-            id=1,
-            errlevel=2,
-            stagestatus="驳回不支持语句",
-            errormessage="仅支持DML和DDL语句，查询语句请使用SQL查询功能！",
-            sql=sql,
-        )
-        _inception_engine.return_value.execute_check.return_value = ReviewSet(
-            full_sql=sql, rows=[inc_row]
-        )
-        new_engine = MysqlEngine(instance=self.ins1)
-        check_result = new_engine.execute_check(db_name="archery", sql=sql)
-        self.assertIsInstance(check_result, ReviewSet)
-        self.assertEqual(check_result.rows[0].__dict__, row.__dict__)
-
-    @patch("sql.engines.mysql.GoInceptionEngine")
-    def test_execute_check_critical_sql(self, _inception_engine):
-        self.sys_config.set("goinception", "true")
-        self.sys_config.set("critical_ddl_regex", "^|update")
-        self.sys_config.get_all_config()
-        sql = "update user set id=1"
-        inc_row = ReviewResult(
-            id=1,
-            errlevel=0,
-            stagestatus="Audit completed",
-            errormessage="None",
-            sql=sql,
-            affected_rows=0,
-            execute_time="",
-        )
-        row = ReviewResult(
-            id=1,
-            errlevel=2,
-            stagestatus="驳回高危SQL",
-            errormessage="禁止提交匹配" + "^|update" + "条件的语句！",
-            sql=sql,
-        )
-        _inception_engine.return_value.execute_check.return_value = ReviewSet(
-            full_sql=sql, rows=[inc_row]
-        )
-        new_engine = MysqlEngine(instance=self.ins1)
-        check_result = new_engine.execute_check(db_name="archery", sql=sql)
-        self.assertIsInstance(check_result, ReviewSet)
-        self.assertEqual(check_result.rows[0].__dict__, row.__dict__)
-
-    @patch("sql.engines.mysql.GoInceptionEngine")
-    def test_execute_check_normal_sql(self, _inception_engine):
-        self.sys_config.set("goinception", "true")
-        sql = "update user set id=1"
-        row = ReviewResult(
-            id=1,
-            errlevel=0,
-            stagestatus="Audit completed",
-            errormessage="None",
-            sql=sql,
-            affected_rows=0,
-            execute_time=0,
-        )
-        _inception_engine.return_value.execute_check.return_value = ReviewSet(
-            full_sql=sql, rows=[row]
-        )
-        new_engine = MysqlEngine(instance=self.ins1)
-        check_result = new_engine.execute_check(db_name="archery", sql=sql)
-        self.assertIsInstance(check_result, ReviewSet)
-        self.assertEqual(check_result.rows[0].__dict__, row.__dict__)
-
-    @patch("sql.engines.mysql.GoInceptionEngine")
-    def test_execute_check_normal_sql_with_Exception(self, _inception_engine):
-        sql = "update user set id=1"
-        _inception_engine.return_value.execute_check.side_effect = RuntimeError()
-        new_engine = MysqlEngine(instance=self.ins1)
-        with self.assertRaises(RuntimeError):
-            new_engine.execute_check(db_name=0, sql=sql)
-
-    @patch.object(MysqlEngine, "query")
-    @patch("sql.engines.mysql.GoInceptionEngine")
-    def test_execute_workflow(self, _inception_engine, _query):
-        self.sys_config.set("goinception", "true")
-        sql = "update user set id=1"
-        _inception_engine.return_value.execute.return_value = ReviewSet(full_sql=sql)
-        _query.return_value.rows = (("0",),)
-        new_engine = MysqlEngine(instance=self.ins1)
-        execute_result = new_engine.execute_workflow(self.wf)
-        self.assertIsInstance(execute_result, ReviewSet)
-
-    @patch("MySQLdb.connect.cursor.execute")
-    @patch("MySQLdb.connect.cursor")
-    @patch("MySQLdb.connect")
-    def test_execute(self, _connect, _cursor, _execute):
-        new_engine = MysqlEngine(instance=self.ins1)
-        execute_result = new_engine.execute(self.wf)
-        self.assertIsInstance(execute_result, ResultSet)
-
-    @patch("MySQLdb.connect")
-    def test_server_version(self, _connect):
-        _connect.return_value.get_server_info.return_value = "5.7.20-16log"
-        new_engine = MysqlEngine(instance=self.ins1)
-        server_version = new_engine.server_version
-        self.assertTupleEqual(server_version, (5, 7, 20))
-
-    @patch.object(MysqlEngine, "query")
-    def test_get_variables_not_filter(self, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        new_engine.get_variables()
-        _query.assert_called_once()
-
-    @patch("MySQLdb.connect")
-    @patch.object(MysqlEngine, "query")
-    def test_get_variables_filter(self, _query, _connect):
-        _connect.return_value.get_server_info.return_value = "5.7.20-16log"
-        new_engine = MysqlEngine(instance=self.ins1)
-        new_engine.get_variables(variables=["binlog_format"])
-        _query.assert_called()
-
-    @patch.object(MysqlEngine, "query")
-    def test_set_variable(self, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        new_engine.set_variable("binlog_format", "ROW")
-        _query.assert_called_once_with(sql="set global binlog_format=ROW;")
-
-    @patch("sql.engines.mysql.GoInceptionEngine")
-    def test_osc_go_inception(self, _inception_engine):
-        self.sys_config.set("goinception", "false")
-        _inception_engine.return_value.osc_control.return_value = ReviewSet()
-        command = "get"
-        sqlsha1 = "xxxxx"
-        new_engine = MysqlEngine(instance=self.ins1)
-        new_engine.osc_control(sqlsha1=sqlsha1, command=command)
-
-    @patch("sql.engines.mysql.GoInceptionEngine")
-    def test_osc_inception(self, _inception_engine):
-        self.sys_config.set("goinception", "true")
-        _inception_engine.return_value.osc_control.return_value = ReviewSet()
-        command = "get"
-        sqlsha1 = "xxxxx"
-        new_engine = MysqlEngine(instance=self.ins1)
-        new_engine.osc_control(sqlsha1=sqlsha1, command=command)
-
-    @patch.object(MysqlEngine, "query")
-    def test_kill_connection(self, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        new_engine.kill_connection(100)
-        _query.assert_called_once_with(sql="kill 100")
-
-    @patch.object(MysqlEngine, "query")
-    def test_seconds_behind_master(self, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        new_engine.seconds_behind_master
-        _query.assert_called_once_with(
-            sql="show slave status",
-            close_conn=False,
-            cursorclass=MySQLdb.cursors.DictCursor,
-        )
-
-    @patch.object(MysqlEngine, "query")
-    def test_processlist(self, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        _query.return_value = ResultSet()
-        for command_type in ["Query", "All", "Not Sleep"]:
-            r = new_engine.processlist(command_type)
-            self.assertIsInstance(r, ResultSet)
-
-    @patch.object(MysqlEngine, "query")
-    def test_get_kill_command(self, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        _query.return_value.rows = (("kill 1;",), ("kill 2;",))
-        r = new_engine.get_kill_command([1, 2])
-        self.assertEqual(r, "kill 1;kill 2;")
-
-    @patch("MySQLdb.connect.cursor.execute")
-    @patch("MySQLdb.connect.cursor")
-    @patch("MySQLdb.connect")
-    @patch.object(MysqlEngine, "query")
-    def test_kill(self, _query, _connect, _cursor, _execute):
-        new_engine = MysqlEngine(instance=self.ins1)
-        _query.return_value.rows = (("kill 1;",), ("kill 2;",))
-        _execute.return_value = ResultSet()
-        r = new_engine.kill([1, 2])
-        self.assertIsInstance(r, ResultSet)
-
-    @patch.object(MysqlEngine, "query")
-    def test_tablespace(self, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        _query.return_value = ResultSet()
-        r = new_engine.tablespace()
-        self.assertIsInstance(r, ResultSet)
-
-    @patch.object(MysqlEngine, "query")
-    def test_tablespace_count(self, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        _query.return_value = ResultSet()
-        r = new_engine.tablespace_count()
-        self.assertIsInstance(r, ResultSet)
-
-    @patch.object(MysqlEngine, "query")
-    @patch("MySQLdb.connect")
-    def test_trxandlocks(self, _connect, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        _connect.return_value = Mock()
-        for v in ["5.7.0", "8.0.1"]:
-            _connect.return_value.get_server_info.return_value = v
-            _query.return_value = ResultSet()
-            r = new_engine.trxandlocks()
-            self.assertIsInstance(r, ResultSet)
-
-    @patch.object(MysqlEngine, "query")
-    def test_get_long_transaction(self, _query):
-        new_engine = MysqlEngine(instance=self.ins1)
-        _query.return_value = ResultSet()
-        r = new_engine.get_long_transaction()
-        self.assertIsInstance(r, ResultSet)
-
-    @patch.object(MysqlEngine, "get_bind_users")
-    @patch.object(MysqlEngine, "query")
-    def test_get_all_databases_summary(self, _query, _get_bind_users):
-        db_result1 = ResultSet()
-        db_result1.rows = [("some_db", "utf8mb4", "utf8mb4_general_ci")]
-        _query.return_value = db_result1
-        _get_bind_users.return_value = [("'some_user'@'%'", "cooperate_sign")]
-        new_engine = MysqlEngine(instance=self.ins1)
-        dbs = new_engine.get_all_databases_summary()
-        self.assertEqual(
-            dbs.rows,
-            [
-                {
-                    "db_name": "some_db",
-                    "charset": "utf8mb4",
-                    "collation": "utf8mb4_general_ci",
-                    "grantees": ["'some_user'@'%'"],
-                    "saved": False,
-                }
-            ],
-        )
-
-    @patch("MySQLdb.connect")
-    @patch.object(MysqlEngine, "query")
-    def test_get_instance_users_summary(self, _query, _connect):
-        result = ResultSet()
-        result.error = "query error"
-        _query.return_value = result
-        new_engine = MysqlEngine(instance=self.ins1)
-        user_summary = new_engine.get_instance_users_summary()
-        self.assertEqual(user_summary.error, "query error")
-
-    @patch("MySQLdb.connect")
-    @patch.object(MysqlEngine, "execute")
-    def test_create_instance_user(self, _execute, _connect):
-        _execute.return_value = ResultSet()
-        new_engine = MysqlEngine(instance=self.ins1)
-        result = new_engine.create_instance_user(
-            user="some_user", host="%", password1="123456", remark=""
-        )
-        self.assertEqual(
-            result.rows,
-            [
-                {
-                    "instance": self.ins1,
-                    "user": "some_user",
-                    "host": "%",
-                    "password": "123456",
-                    "remark": "",
-                }
-            ],
-        )
 
 
 class TestRedis(TestCase):
@@ -769,11 +306,132 @@ class TestRedis(TestCase):
         self.assertIsInstance(query_result, ResultSet)
         self.assertTupleEqual(query_result.rows, (["text"],))
 
+    @patch("redis.Redis.execute_command")
+    def test_query_with_dict_response(self, _execute_command):
+        # 定义 execute_command 的字典响应
+        dict_response = {
+            "key1": "value1",
+            "key2": {"subkey": "subvalue"},
+            "key3": ["listitem1", "listitem2"],
+        }
+        _execute_command.return_value = dict_response
+        new_engine = RedisEngine(instance=self.ins)
+        query_result = new_engine.query(db_name=0, sql="keys *", limit_num=100)
+
+        # 验证结果集
+        expected_rows = [
+            ["key1", "value1"],
+            ["key2", json.dumps({"subkey": "subvalue"})],
+            ["key3", json.dumps(["listitem1", "listitem2"])],
+        ]
+        self.assertIsInstance(query_result, ResultSet)
+        self.assertEqual(query_result.column_list, ["field", "value"])
+        self.assertEqual(query_result.rows, tuple(expected_rows))
+        self.assertEqual(query_result.affected_rows, len(expected_rows))
+
     @patch("redis.Redis.config_get", return_value={"databases": 4})
     def test_get_all_databases(self, _config_get):
         new_engine = RedisEngine(instance=self.ins)
         dbs = new_engine.get_all_databases()
         self.assertListEqual(dbs.rows, ["0", "1", "2", "3"])
+
+    @patch("redis.Redis.info")
+    @patch("redis.Redis.config_get")
+    def test_get_all_databases_exception_handling(self, mock_config_get, mock_info):
+        # 模拟config_get方法抛出异常
+        mock_config_get.side_effect = Exception("模拟config_get异常")
+        # 模拟info方法返回特定的Keyspace信息
+        mock_info.return_value = {
+            "db0": "some_info",
+            "db1": "some_info",
+            "db18": "some_info",
+        }
+        # 实例化RedisEngine并调用get_all_databases方法
+        new_engine = RedisEngine(instance=self.ins)
+        result = new_engine.get_all_databases()
+        # 验证返回的数据库列表是否符合预期.
+        expected_dbs = [str(x) for x in range(int(19))]
+        self.assertListEqual(result.rows, expected_dbs)
+        # 验证config_get方法被调用
+        mock_config_get.assert_called_once_with("databases")
+        # 验证info方法被调用
+        mock_info.assert_called_once_with("Keyspace")
+
+    @patch("redis.Redis.info")
+    @patch("redis.Redis.config_get")
+    def test_get_all_databases_with_empty_return_value(
+        self, mock_config_get, mock_info
+    ):
+        """
+        测试当Redis CONFIG GET命令因异常而失败，并且info命令返回空Keyspace信息时，
+        get_all_databases方法应正确处理并返回包含从0到15的数据库索引列表。
+        """
+        # 模拟config_get方法抛出异常
+        mock_config_get.side_effect = Exception("模拟config_get异常")
+        # 模拟info方法返回空的Keyspace信息
+        mock_info.return_value = {}
+        # 实例化RedisEngine并调用get_all_databases方法
+        new_engine = RedisEngine(instance=self.ins)
+        result = new_engine.get_all_databases()
+        # 验证返回的数据库列表，应该包括0到15，总共16个数据库
+        expected_dbs = [str(x) for x in range(16)]
+        self.assertListEqual(result.rows, expected_dbs)
+        # 验证config_get和info方法的调用
+        mock_config_get.assert_called_once_with("databases")
+        mock_info.assert_called_once_with("Keyspace")
+
+    @patch("redis.Redis.info")
+    @patch("redis.Redis.config_get")
+    def test_get_all_databases_with_less_than_15_dbs(self, mock_config_get, mock_info):
+        """
+        测试当Redis CONFIG GET命令因异常而失败，并且info命令返回的Keyspace信息
+        db num数据库值小于15时，get_all_databases方法应正确处理并返回包含从0到15的数据库索引列表。
+        """
+        # 模拟config_get方法抛出异常
+        mock_config_get.side_effect = Exception("模拟config_get异常")
+        # 模拟info方法返回小于15个数据库的Keyspace信息
+        mock_info.return_value = {
+            "db0": "some_info",
+            "db1": "some_info",
+            "db5": "some_info",
+            # 假设只有3个数据库
+        }
+        # 实例化RedisEngine并调用get_all_databases方法
+        new_engine = RedisEngine(instance=self.ins)
+        result = new_engine.get_all_databases()
+        # 验证返回的数据库列表，应该包括0到15，总共16个数据库
+        expected_dbs = [str(x) for x in range(16)]
+        self.assertListEqual(result.rows, expected_dbs)
+        # 验证config_get和info方法的调用
+        mock_config_get.assert_called_once_with("databases")
+        mock_info.assert_called_once_with("Keyspace")
+
+    @patch(
+        "redis.Redis.scan_iter", return_value=["table1", "table2", "table3", "table4"]
+    )
+    def test_get_all_tables_success(self, _scan_iter):
+        # 创建 RedisEngine 实例
+        new_engine = RedisEngine(instance=self.ins)
+
+        # 调用 get_all_tables 方法
+        db_name = "4"
+        result = new_engine.get_all_tables(db_name)
+        mask_result_rows = ["table1", "table2", "table3", "table4"]
+        # 验证返回的表格信息
+        self.assertEqual(result.rows, mask_result_rows)
+
+    @patch("redis.Redis.scan_iter", side_effect=Exception("Test Exception"))
+    def test_get_all_tables_exception(self, _scan_iter):
+        # 创建 RedisEngine 实例
+        new_engine = RedisEngine(instance=self.ins)
+
+        # 调用 get_all_tables 方法并模拟异常
+        db_name = "4"
+        result = new_engine.get_all_tables(db_name)
+
+        # 验证返回的异常信息
+        self.assertEqual(result.rows, [])
+        self.assertIn(result.message, "Test Exception")
 
     def test_query_check_safe_cmd(self):
         safe_cmd = "keys 1*"
@@ -823,7 +481,7 @@ class TestRedis(TestCase):
             id=1,
             errlevel=0,
             stagestatus="Audit completed",
-            errormessage="None",
+            errormessage="暂不支持显示影响行数",
             sql=sql,
             affected_rows=0,
             execute_time=0,
@@ -840,7 +498,7 @@ class TestRedis(TestCase):
             id=1,
             errlevel=0,
             stagestatus="Execute Successfully",
-            errormessage="None",
+            errormessage="暂不支持显示影响行数",
             sql=sql,
             affected_rows=0,
             execute_time=0,
@@ -863,6 +521,43 @@ class TestRedis(TestCase):
         execute_result = new_engine.execute_workflow(workflow=wf)
         self.assertIsInstance(execute_result, ReviewSet)
         self.assertEqual(execute_result.rows[0].__dict__.keys(), row.__dict__.keys())
+
+    @patch("sql.engines.redis.RedisEngine.get_connection")
+    def test_processlist(self, mock_get_connection):
+        """测试 processlist 方法，模拟获取连接并返回客户端列表"""
+
+        # 模拟 Redis 连接的客户端列表
+        mock_conn = Mock()
+
+        return_value_mock = [
+            {"id": "1", "idle": 10, "name": "client_1"},
+            {"id": "2", "idle": 5, "name": "client_2"},
+            {"id": "3", "idle": 20, "name": "client_3"},
+        ]
+        mock_conn.client_list.return_value = return_value_mock
+
+        # 设置 get_connection 返回模拟连接
+        mock_get_connection.return_value = mock_conn
+
+        # 创建 RedisEngine 实例
+        new_engine = RedisEngine(instance=self.ins)
+
+        # 调用 processlist 方法并测试其返回值
+        command_types = ["All"]  # 假设支持的命令类型
+        for command_type in command_types:
+            result_set = new_engine.processlist(command_type=command_type)
+
+            # 验证返回值是 ResultSet 实例
+            self.assertIsInstance(result_set, ResultSet)
+
+            # 验证返回的客户端列表被正确排序
+            sorted_clients = sorted(
+                return_value_mock, key=lambda client: client.get("idle"), reverse=False
+            )
+            self.assertEqual(result_set.rows, sorted_clients)
+
+        # 验证 get_connection 是否被调用
+        mock_get_connection.assert_called()
 
 
 class TestPgSQL(TestCase):
@@ -916,16 +611,46 @@ class TestPgSQL(TestCase):
     @patch("psycopg2.connect.cursor")
     @patch("psycopg2.connect")
     def test_query_not_limit(self, _conn, _cursor, _execute):
-        _conn.return_value.cursor.return_value.fetchall.return_value = [(1,)]
+        # 模拟数据库连接和游标
+        mock_cursor = MagicMock()
+        _conn.return_value.cursor.return_value = mock_cursor
+
+        # 模拟 SQL 查询的返回结果，包含 JSONB 类型、字符串和数字数据
+        mock_cursor.fetchall.return_value = [
+            ({"key": "value"}, "test_string", 123)  # 返回一行数据，三列
+        ]
+        mock_cursor.description = [
+            ("json_column", 3802),  # JSONB 类型
+            ("string_column", 25),  # 25 表示 TEXT 类型的 OID
+            ("number_column", 23),  # 23 表示 INTEGER 类型的 OID
+        ]
+
+        # _conn.return_value.cursor.return_value.fetchall.return_value = [(1,)]
         new_engine = PgSQLEngine(instance=self.ins)
         query_result = new_engine.query(
             db_name="some_dbname",
-            sql="select 1",
+            sql="SELECT json_column, string_column, number_column FROM some_table",
             limit_num=0,
             schema_name="some_schema",
         )
+
+        # 断言查询结果的类型和数据
         self.assertIsInstance(query_result, ResultSet)
-        self.assertListEqual(query_result.rows, [(1,)])
+        # 验证返回的 JSONB 列已转换为 JSON 字符串
+        expected_row = ('{"key": "value"}', "test_string", 123)
+        self.assertListEqual(query_result.rows, [expected_row])
+
+        expected_column = ["json_column", "string_column", "number_column"]
+        # 验证列名是否正确
+        self.assertEqual(query_result.column_list, expected_column)
+
+        # 验证受影响的行数
+        self.assertEqual(query_result.affected_rows, 1)
+
+        # 验证类型代码是否正确（3802 表示 JSONB，25 表示 TEXT，23 表示 INTEGER）
+        expected_column_type_codes = [3802, 25, 23]
+        actual_column_type_codes = [desc[1] for desc in mock_cursor.description]
+        self.assertListEqual(actual_column_type_codes, expected_column_type_codes)
 
     @patch(
         "sql.engines.pgsql.PgSQLEngine.query",
@@ -1007,6 +732,20 @@ class TestPgSQL(TestCase):
                 "bad_query": False,
                 "filtered_sql": sql.strip(),
                 "has_star": True,
+            },
+        )
+
+    def test_query_check_explain(self):
+        sql = "explain select x from xx "
+        new_engine = PgSQLEngine(instance=self.ins)
+        check_result = new_engine.query_check(db_name="archery", sql=sql)
+        self.assertDictEqual(
+            check_result,
+            {
+                "msg": "",
+                "bad_query": False,
+                "filtered_sql": sql.strip(),
+                "has_star": False,
             },
         )
 
@@ -1151,6 +890,40 @@ class TestPgSQL(TestCase):
             self.assertEqual(
                 execute_result.rows[0].__dict__.keys(), row.__dict__.keys()
             )
+
+    @patch("psycopg2.connect")
+    def test_processlist_not_idle(self, mock_connect):
+        # 模拟数据库连接和游标
+        mock_cursor = MagicMock()
+        mock_connect.return_value.cursor.return_value = mock_cursor
+
+        # 假设 query 方法返回的结果
+        mock_cursor.fetchall.return_value = [
+            (123, "test_db", "user", "app_name", "active")
+        ]
+
+        # 创建 PgSQLEngine 实例
+        new_engine = PgSQLEngine(instance=self.ins)
+
+        # 调用 processlist 方法
+        result = new_engine.processlist(command_type="Not Idle")
+        self.assertEqual(result.rows, mock_cursor.fetchall.return_value)
+
+    @patch("psycopg2.connect")
+    def test_processlist_idle(self, mock_connect):
+        # 模拟数据库连接和游标
+        mock_cursor = MagicMock()
+        mock_connect.return_value.cursor.return_value = mock_cursor
+
+        # 假设 query 方法返回的结果
+        mock_cursor.fetchall.return_value = [
+            (123, "test_db", "user", "app_name", "idle")
+        ]
+        # 创建 PgSQLEngine 实例
+        new_engine = PgSQLEngine(instance=self.ins)
+        # 调用 processlist 方法
+        result = new_engine.processlist(command_type="Idle")
+        self.assertEqual(result.rows, mock_cursor.fetchall.return_value)
 
 
 class TestModel(TestCase):
@@ -1601,42 +1374,6 @@ class TestOracle(TestCase):
             },
         )
 
-    def test_filter_sql_with_delimiter(self):
-        sql = "select * from xx;"
-        new_engine = OracleEngine(instance=self.ins)
-        check_result = new_engine.filter_sql(sql=sql, limit_num=100)
-        self.assertEqual(
-            check_result,
-            "select sql_audit.* from (select * from xx) sql_audit where rownum <= 100",
-        )
-
-    def test_filter_sql_with_delimiter_and_where(self):
-        sql = "select * from xx where id>1;"
-        new_engine = OracleEngine(instance=self.ins)
-        check_result = new_engine.filter_sql(sql=sql, limit_num=100)
-        self.assertEqual(
-            check_result,
-            "select sql_audit.* from (select * from xx where id>1) sql_audit where rownum <= 100",
-        )
-
-    def test_filter_sql_without_delimiter(self):
-        sql = "select * from xx;"
-        new_engine = OracleEngine(instance=self.ins)
-        check_result = new_engine.filter_sql(sql=sql, limit_num=100)
-        self.assertEqual(
-            check_result,
-            "select sql_audit.* from (select * from xx) sql_audit where rownum <= 100",
-        )
-
-    def test_filter_sql_with_limit(self):
-        sql = "select * from xx limit 10;"
-        new_engine = OracleEngine(instance=self.ins)
-        check_result = new_engine.filter_sql(sql=sql, limit_num=1)
-        self.assertEqual(
-            check_result,
-            "select sql_audit.* from (select * from xx limit 10) sql_audit where rownum <= 1",
-        )
-
     def test_query_masking(self):
         query_result = ResultSet()
         new_engine = OracleEngine(instance=self.ins)
@@ -1896,11 +1633,11 @@ end;"""
         self.assertIsInstance(execute_result, ResultSet)
 
     @patch("sql.engines.oracle.OracleEngine.query")
-    def test_session_list(self, _query):
+    def test_processlist(self, _query):
         new_engine = OracleEngine(instance=self.ins)
         _query.return_value = ResultSet()
         for command_type in ["All", "Active", "Others"]:
-            r = new_engine.session_list(command_type)
+            r = new_engine.processlist(command_type)
             self.assertIsInstance(r, ResultSet)
 
     @patch("sql.engines.oracle.OracleEngine.query")
@@ -1950,6 +1687,74 @@ end;"""
         r = new_engine.lock_info()
         self.assertIsInstance(r, ResultSet)
 
+    @patch("sql.engines.oracle.OracleEngine.query")
+    def test_get_table_desc_data(self, _query):
+        """测试获取表格字段信息方法"""
+        new_engine = OracleEngine(instance=self.ins)
+
+        # 模拟查询返回结果
+        mock_result = ResultSet()
+        mock_result.column_list = [
+            "列名",
+            "列注释",
+            "字段类型",
+            "字段默认值",
+            "是否为空",
+            "所属索引",
+            "约束类型",
+        ]
+        mock_result.rows = [
+            ("ID", "主键ID", "NUMBER(10)", "1", " NOT NULL", "PK_USER", "P")
+        ]
+        _query.return_value = mock_result
+
+        # 调用被测试方法
+        result = new_engine.get_table_desc_data(db_name="TEST_SCHEMA", tb_name="USERS")
+
+        # 验证结果结构
+        self.assertIsInstance(result, dict)
+        self.assertIn("column_list", result)
+        self.assertIn("rows", result)
+        self.assertIsInstance(result["column_list"], list)
+        self.assertIsInstance(result["rows"], list)
+
+        # 验证query方法被正确调用
+        _query.assert_called_once()
+
+    @patch("sql.engines.oracle.OracleEngine.query")
+    def test_get_table_index_data(self, _query):
+        """测试获取表格索引信息方法"""
+        new_engine = OracleEngine(instance=self.ins)
+
+        # 模拟查询返回结果
+        mock_result = ResultSet()
+        mock_result.column_list = [
+            "索引名称",
+            "唯一性",
+            "索引类型",
+            "压缩属性",
+            "表空间",
+            "状态",
+            "分区",
+        ]
+        mock_result.rows = [
+            ("PK_USERS", "UNIQUE", "NORMAL", "DISABLED", "USERS_TBS", "VALID", "NO")
+        ]
+        _query.return_value = mock_result
+
+        # 调用被测试方法
+        result = new_engine.get_table_index_data(db_name="TEST_SCHEMA", tb_name="USERS")
+
+        # 验证结果结构
+        self.assertIsInstance(result, dict)
+        self.assertIn("column_list", result)
+        self.assertIn("rows", result)
+        self.assertIsInstance(result["column_list"], list)
+        self.assertIsInstance(result["rows"], list)
+
+        # 验证query方法被正确调用
+        _query.assert_called_once()
+
 
 class MongoTest(TestCase):
     def setUp(self) -> None:
@@ -1962,9 +1767,20 @@ class MongoTest(TestCase):
             user="ins_user",
         )
         self.engine = MongoEngine(instance=self.ins)
+        self.sys_config = SysConfig()
+        # rule_type=100的规则不需要加，会自动创建。只需要加脱敏字段
+        DataMaskingColumns.objects.create(
+            rule_type=100,
+            active=True,
+            instance=self.ins,
+            table_schema="*",
+            table_name="*",
+            column_name="mobile",
+        )
 
     def tearDown(self) -> None:
         self.ins.delete()
+        DataMaskingColumns.objects.all().delete()
 
     @patch("sql.engines.mongo.pymongo")
     def test_get_connection(self, mock_pymongo):
@@ -1974,8 +1790,10 @@ class MongoTest(TestCase):
     @patch("sql.engines.mongo.MongoEngine.get_connection")
     def test_query(self, mock_get_connection):
         # TODO 正常查询还没做
-        test_sql = """db.job.find().count()"""
-        self.assertIsInstance(self.engine.query("some_db", test_sql), ResultSet)
+        test_sql1 = """db.job.find().count()"""
+        test_sql2 = """db.job.find({ goofy :{"$exists":false}})"""
+        self.assertIsInstance(self.engine.query("some_db", test_sql1), ResultSet)
+        self.assertIsInstance(self.engine.query("some_db", test_sql2), ResultSet)
 
     @patch("sql.engines.mongo.MongoEngine.get_all_tables")
     def test_query_check(self, mock_get_all_tables):
@@ -2074,11 +1892,72 @@ class MongoTest(TestCase):
         )
 
     @patch("sql.engines.mongo.MongoEngine.get_all_tables")
-    def test_execute_check_on_dml(self, mock_get_all_tables):
+    def test_execute_check_on_dml_without_real_row_count(self, mock_get_all_tables):
+        sql = """db.job.insert([{"orderCode":1001},{"orderCode":1002}]);"""
+        mock_get_all_tables.return_value.rows = "job"
+        check_result = self.engine.execute_check("some_db", sql)
+        self.assertEqual(check_result.rows[0].__dict__["affected_rows"], 0)
+
+    @patch("sql.engines.mongo.MongoEngine.get_all_tables")
+    def test_execute_check_on_insert_one(self, mock_get_all_tables):
+        self.sys_config.set("real_row_count", True)
+        sql = """db.job.insertOne({"orderCode":1001});"""
+        mock_get_all_tables.return_value.rows = "job"
+        check_result = self.engine.execute_check("some_db", sql)
+        self.assertEqual(check_result.rows[0].__dict__["affected_rows"], 1)
+
+    @patch("sql.engines.mongo.MongoEngine.get_all_tables")
+    def test_execute_check_on_insert_single(self, mock_get_all_tables):
+        self.sys_config.set("real_row_count", True)
+        sql = """db.job.insert({"orderCode":1001});"""
+        mock_get_all_tables.return_value.rows = "job"
+        check_result = self.engine.execute_check("some_db", sql)
+        self.assertEqual(check_result.rows[0].__dict__["affected_rows"], 1)
+
+    @patch("sql.engines.mongo.MongoEngine.get_all_tables")
+    def test_execute_check_on_insert_multiple(self, mock_get_all_tables):
+        self.sys_config.set("real_row_count", True)
         sql = """db.job.insert([{"orderCode":1001},{"orderCode":1002}]);"""
         mock_get_all_tables.return_value.rows = "job"
         check_result = self.engine.execute_check("some_db", sql)
         self.assertEqual(check_result.rows[0].__dict__["affected_rows"], 2)
+
+    @patch("sql.engines.mongo.MongoEngine.get_all_tables")
+    def test_execute_check_on_insert_except(self, mock_get_all_tables):
+        self.sys_config.set("real_row_count", True)
+        sql = """db.job.insert(("orderCode":1001));"""
+        mock_get_all_tables.return_value.rows = "job"
+        check_result = self.engine.execute_check("some_db", sql)
+        self.assertEqual(check_result.rows[0].__dict__["affected_rows"], 0)
+
+    @patch("sql.engines.mongo.MongoEngine.get_all_tables")
+    @patch("sql.engines.mongo.MongoEngine.query")
+    def test_execute_check_on_update_with_find(self, mock_get_all_tables, mock_query):
+        self.sys_config.set("real_row_count", True)
+        sql = """db.job.find({"orderCode":1001}).update(({"orderCode":1002}));"""
+        mock_get_all_tables.return_value.rows = "job"
+        mock_query.return_value.rows = (('{"count": 0}',),)
+        check_result = self.engine.execute_check("some_db", sql)
+        self.assertEqual(check_result.rows[0].__dict__["affected_rows"], 0)
+
+    @patch("sql.engines.mongo.MongoEngine.get_all_tables")
+    @patch("sql.engines.mongo.MongoEngine.query")
+    def test_execute_check_on_update_without_find(
+        self, mock_get_all_tables, mock_query
+    ):
+        self.sys_config.set("real_row_count", True)
+        sql = """db.job.update({"orderCode":1001},{$set:{"orderCode":1002}}));"""
+        mock_get_all_tables.return_value.rows = "job"
+        mock_query.return_value.rows = (('{"count": 0}',),)
+        check_result = self.engine.execute_check("some_db", sql)
+        self.assertEqual(check_result.rows[0].__dict__["affected_rows"], 0)
+
+    @patch("sql.engines.mongo.MongoEngine.get_all_tables")
+    def test_execute_check_with_syntax_error(self, mock_get_all_tables):
+        sql = """db.job.insert({"orderCode":1001);"""
+        mock_get_all_tables.return_value.rows = "job"
+        check_result = self.engine.execute_check("some_db", sql)
+        self.assertEqual(check_result.rows[0].__dict__["stagestatus"], "语法错误")
 
     @patch("sql.engines.mongo.MongoEngine.exec_cmd")
     @patch("sql.engines.mongo.MongoEngine.get_master")
@@ -2138,21 +2017,30 @@ class MongoTest(TestCase):
         self.assertEqual(cols, ["_id", "title", "tags", "likes", "text", "author"])
 
     @patch("sql.engines.mongo.MongoEngine.get_connection")
-    def test_current_op(self, mock_get_connection):
-        class Aggregate:
+    def test_processlist(self, mock_get_connection):
+        # 模拟 MongoDB aggregate 的游标行为
+        class AggregateCursor:
             def __enter__(self):
-                yield {"client": "single_client"}
-                yield {"clientMetadata": {"mongos": {"client": "sharding_client"}}}
+                yield {
+                    "client": "single_client",
+                    "effectiveUsers": [{"user": "user_1"}],
+                    "clientMetadata": {"mongos": {"client": "sharding_client"}},
+                }
+                yield {
+                    "clientMetadata": {"mongos": {}},
+                    "effectiveUsers": [{"user": "user_2"}],
+                }
+                yield {"effectiveUsers": []}
 
-            def __exit__(self, *arg, **kwargs):
+            def __exit__(self, exc_type, exc_value, traceback):
                 pass
 
         mock_conn = Mock()
-        mock_conn.admin.aggregate.return_value = Aggregate()
+        mock_conn.admin.aggregate.return_value = AggregateCursor()
         mock_get_connection.return_value = mock_conn
         command_types = ["Full", "All", "Inner", "Active"]
         for command_type in command_types:
-            result_set = self.engine.current_op(command_type)
+            result_set = self.engine.processlist(command_type)
             self.assertIsInstance(result_set, ResultSet)
 
     @patch("sql.engines.mongo.MongoEngine.get_connection")
@@ -2266,6 +2154,27 @@ class MongoTest(TestCase):
                 }
             ],
         )
+
+    def test_query_masking(self):
+        query_result = ResultSet()
+        new_engine = MongoEngine(instance=self.ins)
+        query_result.column_list = ["id", "mobile"]
+        query_result.rows = (
+            ("a11", "18888888888"),
+            ("a12", ""),
+            ("a13", None),
+            ("a14", "18888888889"),
+        )
+        masking_result = new_engine.query_masking(
+            db_name="archery", sql="db.test_collection.find()", resultset=query_result
+        )
+        mask_result_rows = [
+            ["a11", "188****8888"],
+            ["a12", ""],
+            ["a13", None],
+            ["a14", "188****8889"],
+        ]
+        self.assertEqual(masking_result.rows, mask_result_rows)
 
 
 class TestClickHouse(TestCase):
@@ -2430,7 +2339,8 @@ class TestClickHouse(TestCase):
         select_sql = "select id,name from tb_test"
         check_result = new_engine.execute_check(db_name="some_db", sql=select_sql)
         self.assertEqual(
-            check_result.rows[0].errormessage, "仅支持DML和DDL语句，查询语句请使用SQL查询功能！"
+            check_result.rows[0].errormessage,
+            "仅支持DML和DDL语句，查询语句请使用SQL查询功能！",
         )
 
     @patch.object(ClickHouseEngine, "query")
@@ -2441,11 +2351,41 @@ class TestClickHouse(TestCase):
         mock_query.return_value = result
         new_engine = ClickHouseEngine(instance=self.ins1)
         table_engine = new_engine.get_table_engine(table_name)
-        alter_sql = "alter table default.tb_test add column remark String"
+        alter_sql = "alter table tb_test add column remark String"
         check_result = new_engine.execute_check(db_name="some_db", sql=alter_sql)
         self.assertEqual(
             check_result.rows[0].errormessage,
             "ALTER TABLE仅支持*MergeTree，Merge以及Distributed等引擎表！",
+        )
+
+    @patch.object(ClickHouseEngine, "query")
+    def test_execute_check_truncate_sql(self, mock_query):
+        table_name = "default.tb_test"
+        result = ResultSet()
+        result.rows = [("File",)]
+        mock_query.return_value = result
+        new_engine = ClickHouseEngine(instance=self.ins1)
+        table_engine = new_engine.get_table_engine(table_name)
+        alter_sql = "truncate table tb_test"
+        check_result = new_engine.execute_check(db_name="some_db", sql=alter_sql)
+        self.assertEqual(
+            check_result.rows[0].errormessage,
+            "TRUNCATE不支持View,File,URL,Buffer和Null表引擎！",
+        )
+
+    @patch.object(ClickHouseEngine, "query")
+    def test_execute_check_insert_sql(self, mock_query):
+        table_name = "default.tb_test"
+        result = ResultSet()
+        result.rows = [("Log",)]
+        mock_query.return_value = result
+        new_engine = ClickHouseEngine(instance=self.ins1)
+        table_engine = new_engine.get_table_engine(table_name)
+        alter_sql = "insert into tb_test(name) values('nick');"
+        check_result = new_engine.execute_check(db_name="some_db", sql=alter_sql)
+        self.assertEqual(
+            check_result.rows[0].errlevel,
+            0,
         )
 
     def test_filter_sql_with_delimiter(self):
@@ -2637,3 +2577,22 @@ class ODPSTest(TestCase):
         self.assertEqual(
             result.column_list, ["COLUMN_NAME", "COLUMN_TYPE", "COLUMN_COMMENT"]
         )
+
+
+def test_ssh(db_instance, mocker: MockerFixture):
+    tunnel = Tunnel.objects.create(tunnel_name="test", host="test", port=22)
+    db_instance.tunnel = tunnel
+    db_instance.save()
+
+    class FakeTunnel:
+        def get_ssh(self):
+            return "remote_host", "remote_password"
+
+    mocker.patch("sql.engines.SSHConnection", return_value=FakeTunnel())
+    from sql.engines import EngineBase
+
+    engine = EngineBase(instance=db_instance)
+    remote_host, remote_password, _, _ = engine.remote_instance_conn(
+        instance=engine.instance
+    )
+    assert (remote_host, remote_password) == ("remote_host", "remote_password")

@@ -1,6 +1,11 @@
 """engine base库, 包含一个``EngineBase`` class和一个get_engine函数"""
+
+import importlib
+import re
 from sql.engines.models import ResultSet, ReviewSet
+from sql.models import Instance
 from sql.utils.ssh_tunnel import SSHConnection
+from django.conf import settings
 
 
 class EngineBase:
@@ -8,19 +13,20 @@ class EngineBase:
 
     test_query = None
 
-    def __init__(self, instance=None):
+    name = "Base"
+    info = "base engine"
+
+    def __init__(self, instance: Instance = None):
         self.conn = None
         self.thread_id = None
         if instance:
-            self.instance = instance
+            self.instance = instance  # type: Instance
             self.instance_name = instance.instance_name
             self.host = instance.host
             self.port = int(instance.port)
-            self.user = instance.user
-            self.password = instance.password
+            self.user, self.password = self.instance.get_username_password()
             self.db_name = instance.db_name
             self.mode = instance.mode
-            self.is_ssl = instance.is_ssl
 
             # 判断如果配置了隧道则连接隧道，只测试了MySQL
             if self.instance.tunnel:
@@ -43,6 +49,7 @@ class EngineBase:
             del self.remotessh
 
     def remote_instance_conn(self, instance=None):
+        user, password = instance.get_username_password()
         # 判断如果配置了隧道则连接隧道
         if not hasattr(self, "remotessh") and instance.tunnel:
             self.remotessh = SSHConnection(
@@ -56,13 +63,14 @@ class EngineBase:
                 instance.tunnel.pkey_password,
             )
             self.remote_host, self.remote_port = self.remotessh.get_ssh()
-            self.remote_user = instance.user
-            self.remote_password = instance.password
+            user, password = instance.get_username_password()
+            self.remote_user = user
+            self.remote_password = password
         elif not instance.tunnel:
             self.remote_host = instance.host
             self.remote_port = instance.port
-            self.remote_user = instance.user
-            self.remote_password = instance.password
+            self.remote_user = user
+            self.remote_password = password
         return (
             self.remote_host,
             self.remote_port,
@@ -76,16 +84,6 @@ class EngineBase:
     def test_connection(self):
         """测试实例链接是否正常"""
         return self.query(sql=self.test_query)
-
-    @property
-    def name(self):
-        """返回engine名称"""
-        return "base"
-
-    @property
-    def info(self):
-        """返回引擎简介"""
-        return "Base engine"
 
     def escape_string(self, value: str) -> str:
         """参数转义"""
@@ -105,6 +103,10 @@ class EngineBase:
     def server_version(self):
         """返回引擎服务器版本，返回对象为tuple (x,y,z)"""
         return tuple()
+
+    def processlist(self, command_type, **kwargs) -> ResultSet:
+        """获取连接信息"""
+        return ResultSet()
 
     def kill_connection(self, thread_id):
         """终止数据库连接"""
@@ -179,7 +181,7 @@ class EngineBase:
         limit_num=0,
         close_conn=True,
         parameters=None,
-        **kwargs
+        **kwargs,
     ):
         """实际查询 返回一个ResultSet"""
         return ResultSet()
@@ -213,6 +215,22 @@ class EngineBase:
         return ResultSet()
 
 
+def get_engine_map():
+    available_engines = settings.AVAILABLE_ENGINES
+    enabled_engines = {}
+    for e in settings.ENABLED_ENGINES:
+        config = available_engines.get(e)
+        if not config:
+            raise ValueError(f"invalid engine {e}, not found in engine map")
+        module, o = config["path"].split(":")
+        engine = getattr(importlib.import_module(module), o)
+        enabled_engines[e] = engine
+    return enabled_engines
+
+
+engine_map = get_engine_map()
+
+
 def get_engine(instance=None):  # pragma: no cover
     """获取数据库操作engine"""
     if instance.db_type == "mysql":
@@ -222,44 +240,9 @@ def get_engine(instance=None):  # pragma: no cover
             from .cloud.aliyun_rds import AliyunRDS
 
             return AliyunRDS(instance=instance)
-        from .mysql import MysqlEngine
-
-        return MysqlEngine(instance=instance)
-    elif instance.db_type == "mssql":
-        from .mssql import MssqlEngine
-
-        return MssqlEngine(instance=instance)
-    elif instance.db_type == "redis":
-        from .redis import RedisEngine
-
-        return RedisEngine(instance=instance)
-    elif instance.db_type == "pgsql":
-        from .pgsql import PgSQLEngine
-
-        return PgSQLEngine(instance=instance)
-    elif instance.db_type == "oracle":
-        from .oracle import OracleEngine
-
-        return OracleEngine(instance=instance)
-    elif instance.db_type == "mongo":
-        from .mongo import MongoEngine
-
-        return MongoEngine(instance=instance)
-    elif instance.db_type == "goinception":
-        from .goinception import GoInceptionEngine
-
-        return GoInceptionEngine(instance=instance)
-    elif instance.db_type == "phoenix":
-        from .phoenix import PhoenixEngine
-
-        return PhoenixEngine(instance=instance)
-
-    elif instance.db_type == "odps":
-        from .odps import ODPSEngine
-
-        return ODPSEngine(instance=instance)
-
-    elif instance.db_type == "clickhouse":
-        from .clickhouse import ClickHouseEngine
-
-        return ClickHouseEngine(instance=instance)
+    engine = engine_map.get(instance.db_type)
+    if not engine:
+        raise ValueError(
+            f"engine {instance.db_type} not enabled or not supported, please contact admin"
+        )
+    return engine(instance=instance)

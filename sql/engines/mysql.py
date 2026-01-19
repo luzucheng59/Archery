@@ -2,7 +2,9 @@
 import logging
 import traceback
 import MySQLdb
+import pymysql
 import re
+from enum import Enum
 
 import schemaobject
 import sqlparse
@@ -51,8 +53,21 @@ column_types_map = {
 }
 
 
+class MysqlForkType(Enum):
+    """定义几个支持的版本类型"""
+
+    MYSQL = "mysql"
+    MARIADB = "mariadb"
+    PERCONA = "percona"
+
+
 class MysqlEngine(EngineBase):
+    name = "MySQL"
+    info = "MySQL engine"
     test_query = "SELECT 1"
+    _server_version = None
+    _server_fork_type = None
+    _server_info = None
 
     def __init__(self, instance=None):
         super().__init__(instance=instance)
@@ -90,17 +105,9 @@ class MysqlEngine(EngineBase):
         self.thread_id = self.conn.thread_id()
         return self.conn
 
-    @property
-    def name(self):
-        return "MySQL"
-
-    @property
-    def info(self):
-        return "MySQL engine"
-
     def escape_string(self, value: str) -> str:
         """字符串参数转义"""
-        return MySQLdb.escape_string(value).decode("utf-8")
+        return pymysql.escape_string(value)
 
     @property
     def auto_backup(self):
@@ -122,6 +129,9 @@ class MysqlEngine(EngineBase):
 
     @property
     def server_version(self):
+        if self._server_version:
+            return self._server_version
+
         def numeric_part(s):
             """Returns the leading numeric part of a string."""
             re_numeric_part = re.compile(r"^(\d+)")
@@ -132,7 +142,25 @@ class MysqlEngine(EngineBase):
 
         self.get_connection()
         version = self.conn.get_server_info()
-        return tuple([numeric_part(n) for n in version.split(".")[:3]])
+        self._server_version = tuple([numeric_part(n) for n in version.split(".")[:3]])
+        return self._server_version
+
+    @property
+    def server_info(self):
+        if self._server_info:
+            return self._server_info
+        conn = self.get_connection()
+        self._server_info = conn.get_server_info()
+        return self._server_info
+
+    @property
+    def server_fork_type(self):
+        """确认 server 具体是哪种 mysql, mysql, mariadb, 还是 percona"""
+        server_info = self.server_info
+        for i in list(MysqlForkType):
+            if i.value in server_info.lower():
+                return i
+        return MysqlForkType.MYSQL
 
     @property
     def schema_object(self):
@@ -148,24 +176,32 @@ class MysqlEngine(EngineBase):
         """终止数据库连接"""
         self.query(sql=f"kill {thread_id}")
 
+    # 禁止查询的数据库
+    forbidden_databases = [
+        "information_schema",
+        "performance_schema",
+        "mysql",
+        "test",
+        "sys",
+    ]
+
     def get_all_databases(self):
         """获取数据库列表, 返回一个ResultSet"""
         sql = "show databases"
         result = self.query(sql=sql)
         db_list = [
-            row[0]
-            for row in result.rows
-            if row[0]
-            not in ("information_schema", "performance_schema", "mysql", "test", "sys")
+            row[0] for row in result.rows if row[0] not in self.forbidden_databases
         ]
         result.rows = db_list
         return result
+
+    forbidden_tables = ["test"]
 
     def get_all_tables(self, db_name, **kwargs):
         """获取table 列表, 返回一个ResultSet"""
         sql = "show tables"
         result = self.query(db_name=db_name, sql=sql)
-        tb_list = [row[0] for row in result.rows if row[0] not in ["test"]]
+        tb_list = [row[0] for row in result.rows if row[0] not in self.forbidden_tables]
         result.rows = tb_list
         return result
 
@@ -259,9 +295,7 @@ class MysqlEngine(EngineBase):
 
     def get_tables_metas_data(self, db_name, **kwargs):
         """获取数据库所有表格信息，用作数据字典导出接口"""
-        sql_tbs = (
-            f"SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=%(db_name)s;"
-        )
+        sql_tbs = f"SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=%(db_name)s ORDER BY TABLE_SCHEMA,TABLE_NAME;"
         tbs = self.query(
             sql=sql_tbs,
             cursorclass=MySQLdb.cursors.DictCursor,
@@ -283,7 +317,8 @@ class MysqlEngine(EngineBase):
             _meta["ENGINE_KEYS"] = engine_keys
             _meta["TABLE_INFO"] = tb
             sql_cols = f"""SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
-                            WHERE TABLE_SCHEMA='{tb['TABLE_SCHEMA']}' AND TABLE_NAME='{tb['TABLE_NAME']}';"""
+                            WHERE TABLE_SCHEMA='{tb['TABLE_SCHEMA']}' AND TABLE_NAME='{tb['TABLE_NAME']}'
+                            ORDER BY TABLE_SCHEMA,TABLE_NAME,ORDINAL_POSITION;"""
             _meta["COLUMNS"] = self.query(
                 sql=sql_cols, cursorclass=MySQLdb.cursors.DictCursor, close_conn=False
             ).rows
@@ -329,12 +364,24 @@ class MysqlEngine(EngineBase):
     def get_instance_users_summary(self):
         """实例账号管理功能，获取实例所有账号信息"""
         server_version = self.server_version
-        # MySQL 5.7.6版本起支持ACCOUNT LOCK
-        if server_version >= (5, 7, 6):
-            sql_get_user = "select concat('`', user, '`', '@', '`', host,'`') as query,user,host,account_locked from mysql.user;"
+        sql_get_user_with_account_locked = "select concat('`', user, '`', '@', '`', host,'`') as query,user,host,account_locked from mysql.user;"
+        sql_get_user_without_account_locked = "select concat('`', user, '`', '@', '`', host,'`') as query,user,host from mysql.user;"
+        # MySQL 5.7.6版本, mariadb 10.4.2  起支持ACCOUNT LOCK
+        if (
+            self.server_fork_type == MysqlForkType.MYSQL and server_version >= (5, 7, 6)
+        ) or (
+            self.server_fork_type == MysqlForkType.MARIADB
+            and self.server_version >= (10, 4, 2)
+        ):
+            support_account_lock = True
+            sql_get_user = sql_get_user_with_account_locked
         else:
-            sql_get_user = "select concat('`', user, '`', '@', '`', host,'`') as query,user,host from mysql.user;"
+            support_account_lock = False
+            sql_get_user = sql_get_user_without_account_locked
         query_result = self.query("mysql", sql_get_user)
+        if query_result.error and sql_get_user == sql_get_user_with_account_locked:
+            # 查询出错了, fallback 到不带 lock 信息的 sql
+            query_result = self.query("mysql", sql_get_user_without_account_locked)
         if not query_result.error:
             db_users = query_result.rows
             # 获取用户权限信息
@@ -350,7 +397,11 @@ class MysqlEngine(EngineBase):
                     "host": db_user[2],
                     "privileges": user_priv,
                     "saved": False,
-                    "is_locked": db_user[3] if server_version >= (5, 7, 6) else None,
+                    "is_locked": (
+                        db_user[3]
+                        if support_account_lock and len(db_user) == 4
+                        else None
+                    ),
                 }
                 rows.append(row)
             query_result.rows = rows
@@ -401,6 +452,8 @@ class MysqlEngine(EngineBase):
 
     def get_all_columns_by_tb(self, db_name, tb_name, **kwargs):
         """获取所有字段, 返回一个ResultSet"""
+        db_name = self.escape_string(db_name)
+        tb_name = self.escape_string(tb_name)
         sql = f"""SELECT
             COLUMN_NAME,
             COLUMN_TYPE,
@@ -412,8 +465,8 @@ class MysqlEngine(EngineBase):
         FROM
             information_schema.COLUMNS
         WHERE
-            TABLE_SCHEMA = %(db_name)s
-                AND TABLE_NAME = %(tb_name)s
+            TABLE_SCHEMA = '{db_name}'
+                AND TABLE_NAME = '{tb_name}'
         ORDER BY ORDINAL_POSITION;"""
         result = self.query(
             db_name=db_name,
@@ -484,7 +537,9 @@ class MysqlEngine(EngineBase):
             if kwargs.get("binary_as_hex"):
                 result_set = self.result_set_binary_as_hex(result_set)
         except Exception as e:
-            logger.warning(f"MySQL语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}")
+            logger.warning(
+                f"{self.name}语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}"
+            )
             result_set.error = str(e)
         finally:
             if close_conn:
@@ -577,14 +632,18 @@ class MysqlEngine(EngineBase):
                 instance=self.instance, db_name=db_name, sql=sql
             )
         except Exception as e:
-            logger.debug(f"{self.inc_engine.name}检测语句报错：错误信息{traceback.format_exc()}")
+            logger.debug(
+                f"{self.inc_engine.name}检测语句报错：错误信息{traceback.format_exc()}"
+            )
             raise RuntimeError(
                 f"{self.inc_engine.name}检测语句报错，请注意检查系统配置中{self.inc_engine.name}配置，错误信息：\n{e}"
             )
 
         # 判断Inception检测结果
         if check_result.error:
-            logger.debug(f"{self.inc_engine.name}检测语句报错：错误信息{check_result.error}")
+            logger.debug(
+                f"{self.inc_engine.name}检测语句报错：错误信息{check_result.error}"
+            )
             raise RuntimeError(
                 f"{self.inc_engine.name}检测语句报错，错误信息：\n{check_result.error}"
             )
@@ -659,7 +718,9 @@ class MysqlEngine(EngineBase):
             conn.commit()
             cursor.close()
         except Exception as e:
-            logger.warning(f"MySQL语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}")
+            logger.warning(
+                f"{self.name}语句执行报错，语句：{sql}，错误信息{traceback.format_exc()}"
+            )
             result.error = str(e)
         if close_conn:
             self.close()
@@ -699,9 +760,13 @@ class MysqlEngine(EngineBase):
         """
         return self.inc_engine.osc_control(**kwargs)
 
-    def processlist(self, command_type):
+    def processlist(
+        self,
+        command_type,
+        base_sql="select id, user, host, db, command, time, state, ifnull(info,'') as info from information_schema.processlist",
+        **kwargs,
+    ):
         """获取连接信息"""
-        base_sql = "select id, user, host, db, command, time, state, ifnull(info,'') as info from information_schema.processlist"
         # escape
         command_type = self.escape_string(command_type)
         if not command_type:
@@ -715,11 +780,12 @@ class MysqlEngine(EngineBase):
 
         return self.query("information_schema", sql)
 
-    def get_kill_command(self, thread_ids):
+    def get_kill_command(self, thread_ids, thread_ids_check=True):
         """由传入的线程列表生成kill命令"""
         # 校验传参
-        if [i for i in thread_ids if not isinstance(i, int)]:
-            return None
+        if thread_ids_check:
+            if [i for i in thread_ids if not isinstance(i, int)]:
+                return None
         sql = "select concat('kill ', id, ';') from information_schema.processlist where id in ({});".format(
             ",".join(str(tid) for tid in thread_ids)
         )
@@ -730,11 +796,12 @@ class MysqlEngine(EngineBase):
 
         return kill_sql
 
-    def kill(self, thread_ids):
+    def kill(self, thread_ids, thread_ids_check=True):
         """kill线程"""
         # 校验传参
-        if [i for i in thread_ids if not isinstance(i, int)]:
-            return ResultSet(full_sql="")
+        if thread_ids_check:
+            if [i for i in thread_ids if not isinstance(i, int)]:
+                return ResultSet(full_sql="")
         sql = "select concat('kill ', id, ';') from information_schema.processlist where id in ({});".format(
             ",".join(str(tid) for tid in thread_ids)
         )
@@ -853,7 +920,7 @@ class MysqlEngine(EngineBase):
         TO_SECONDS(NOW()) - TO_SECONDS(trx.trx_started) trx_idle_time,
         p.time thread_time,
         IFNULL((SELECT
-        GROUP_CONCAT(t1.sql_text SEPARATOR ';
+        GROUP_CONCAT(t1.sql_text order by t1.TIMER_START desc SEPARATOR ';
         ')
         FROM performance_schema.events_statements_history t1
         INNER JOIN performance_schema.threads t2

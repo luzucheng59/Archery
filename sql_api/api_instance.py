@@ -1,6 +1,7 @@
 from rest_framework import views, generics, status, serializers
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
+from sql.utils.sql_utils import filter_db_list
 from .serializers import (
     InstanceSerializer,
     InstanceDetailSerializer,
@@ -193,6 +194,16 @@ class InstanceResource(views.APIView):
             tb_name = query_engine.escape_string(tb_name)
             if resource_type == "database":
                 resource = query_engine.get_all_databases()
+                resource.rows = filter_db_list(
+                    db_list=resource.rows,
+                    db_name_regex=query_engine.instance.show_db_name_regex,
+                    is_match_regex=True,
+                )
+                resource.rows = filter_db_list(
+                    db_list=resource.rows,
+                    db_name_regex=query_engine.instance.denied_db_name_regex,
+                    is_match_regex=False,
+                )
             elif resource_type == "schema" and db_name:
                 resource = query_engine.get_all_schemas(db_name=db_name)
             elif resource_type == "table" and db_name:
@@ -204,7 +215,9 @@ class InstanceResource(views.APIView):
                     db_name=db_name, tb_name=tb_name, schema_name=schema_name
                 )
             else:
-                raise serializers.ValidationError({"errors": "不支持的资源类型或者参数不完整！"})
+                raise serializers.ValidationError(
+                    {"errors": "不支持的资源类型或者参数不完整！"}
+                )
         except Exception as msg:
             raise serializers.ValidationError({"errors": msg})
         else:

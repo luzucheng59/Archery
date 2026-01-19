@@ -40,15 +40,9 @@ def debug(request):
     full = request.GET.get("full")
 
     # 系统配置
-    sys_config = SysConfig().sys_config
-    # 敏感信息处理
-    secret_keys = [
-        "inception_remote_backup_password",
-        "ding_app_secret",
-        "feishu_app_secret",
-        "mail_smtp_password",
-    ]
-    sys_config.update({k: "******" for k in secret_keys})
+    config = SysConfig()
+    config.get_all_config()
+    sys_config = config.sys_config
 
     # MySQL信息
     cursor = connection.cursor()
@@ -109,9 +103,11 @@ def debug(request):
         django_q_info = {
             "version": django_q_version,
             "conf": django_q.conf.Conf.conf,
-            "q_cluster_stats": q_cluster_stats
-            if q_cluster_stats
-            else "没有正在运行的集群信息，请检查django_q状态",
+            "q_cluster_stats": (
+                q_cluster_stats
+                if q_cluster_stats
+                else "没有正在运行的集群信息，请检查django_q状态"
+            ),
             "q_broker_stats": q_broker_stats,
         }
     except Exception as e:
@@ -120,6 +116,8 @@ def debug(request):
     # Inception和goInception信息
     go_inception_host = sys_config.get("go_inception_host")
     go_inception_port = sys_config.get("go_inception_port", 0)
+    go_inception_user = sys_config.get("go_inception_user", "")
+    go_inception_password = sys_config.get("go_inception_password", "")
     inception_remote_backup_host = sys_config.get("inception_remote_backup_host", "")
     inception_remote_backup_port = sys_config.get("inception_remote_backup_port", "")
     inception_remote_backup_user = sys_config.get("inception_remote_backup_user", "")
@@ -132,6 +130,8 @@ def debug(request):
         goinc_conn = MySQLdb.connect(
             host=go_inception_host,
             port=int(go_inception_port),
+            user=go_inception_user,
+            passwd=go_inception_password,
             connect_timeout=1,
             cursorclass=MySQLdb.cursors.DictCursor,
         )
@@ -173,6 +173,19 @@ def debug(request):
     installed_packages_list = sorted(
         ["%s==%s" % (i.key, i.version) for i in installed_packages]
     )
+
+    # 敏感信息处理
+    secret_keys = [
+        "inception_remote_backup_password",
+        "ding_app_secret",
+        "feishu_app_secret",
+        "mail_smtp_password",
+        "go_inception_password",
+        "wx_app_secret",
+        "aliyun_access_key_secret",
+        "tencent_secret_key",
+    ]
+    sys_config.update({k: "******" for k in secret_keys})
 
     # 最终集合
     system_info = {

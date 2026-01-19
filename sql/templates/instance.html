@@ -13,15 +13,9 @@
         <div class="form-group">
             <select id="db_type" class="form-control selectpicker">
                 <option value="" selected="selected">数据库类型</option>
-                <option value="mysql">MySQL</option>
-                <option value="mssql">MsSQL</option>
-                <option value="redis">Redis</option>
-                <option value="pgsql">PgSQL</option>
-                <option value="oracle">Oracle</option>
-                <option value="mongo">Mongo</option>
-                <option value="phoenix">Phoenix</option>
-                <option value="odps">ODPS</option>
-                <option value="clickhouse">ClickHouse</option>
+                {% for name, engine in engines.items %}
+                    <option value="{{ name }}">{{ engine.name }}</option>
+                {%  endfor %}
             </select>
         </div>
         <div class="form-group">
@@ -96,7 +90,7 @@
                 sortName: 'id',                   //排序字段
                 sidePagination: "server",           //分页方式：client客户端分页，server服务端分页（*）
                 pageNumber: 1,                      //初始化加载第一页，默认第一页,并记录
-                pageSize: 14,                     //每页的记录行数（*）
+                pageSize: 20,                     //每页的记录行数（*）
                 pageList: [20, 30, 50, 100],       //可供选择的每页的行数（*）
                 showExport: true,                   //是否显示导出按钮
                 exportOptions: {

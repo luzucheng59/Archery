@@ -2,39 +2,41 @@
 
 {% block content %}
     <!-- 自定义操作按钮-->
-    <div id="toolbar" class="form-inline pull-left">
-        <div class="form-group">
-            <select id="filter_instance_id" class="form-control selectpicker"
-                    data-live-search="true">
-                <option value="" selected="selected">全部实例</option>
-                {% for ins in ins_list %}
-                    <option value="{{ ins.id }}">{{ ins.instance_name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="form-group">
-            <select id="state" class="form-control selectpicker">
-                <option value="" selected="selected">启用状态</option>
-                <option value="true">启用</option>
-                <option value="false">未启用</option>
-            </select>
-        </div>
-        <div class="form-group">
-            <button id="btn_add" type="button" class="btn btn-default"
-                    data-toggle="modal" data-target="#apply">
-                <span class="glyphicon glyphicon-plus" aria-hidden="true"></span>
-                <span aria-hidden="true"></span>申请归档
-            </button>
-        </div>
-        {% if perms.sql.archive_mgt %}
+    <div style="position: relative">
+        <div id="toolbar" class="form-inline pull-left" style="position: absolute;top: 10px">
             <div class="form-group">
-                <button id="btn_add_config" type="button" class="btn btn-info"
-                        onclick="window.open('/admin/sql/archiveconfig/add/')">
-                    <span class="glyphicon glyphicon-arrow-up" aria-hidden="true"></span>
-                    <span aria-hidden="true"></span>添加配置
+                <select id="filter_instance_id" class="form-control selectpicker"
+                        data-live-search="true">
+                    <option value="" selected="selected">全部实例</option>
+                    {% for ins in ins_list %}
+                        <option value="{{ ins.id }}">{{ ins.instance_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <select id="state" class="form-control selectpicker">
+                    <option value="" selected="selected">启用状态</option>
+                    <option value="true">启用</option>
+                    <option value="false">未启用</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <button id="btn_add" type="button" class="btn btn-default"
+                        data-toggle="modal" data-target="#apply">
+                    <span class="glyphicon glyphicon-plus" aria-hidden="true"></span>
+                    <span aria-hidden="true"></span>申请归档
                 </button>
             </div>
-        {% endif %}
+            {% if perms.sql.archive_mgt %}
+                <div class="form-group">
+                    <button id="btn_add_config" type="button" class="btn btn-info"
+                            onclick="window.open('/admin/sql/archiveconfig/add/')">
+                        <span class="glyphicon glyphicon-arrow-up" aria-hidden="true"></span>
+                        <span aria-hidden="true"></span>添加配置
+                    </button>
+                </div>
+            {% endif %}
+        </div>
     </div>
     <!-- 申请列表的表格-->
     <div class="table-responsive">
@@ -269,7 +271,7 @@
                 sortOrder: "asc",                   //排序方式
                 sidePagination: "server",           //分页方式：client客户端分页，server服务端分页（*）
                 pageNumber: 1,                      //初始化加载第一页，默认第一页,并记录
-                pageSize: 14,                     //每页的记录行数（*）
+                pageSize: 20,                     //每页的记录行数（*）
                 pageList: [20, 30, 50, 100],       //可供选择的每页的行数（*）
                 search: true,                      //是否显示表格搜索
                 strictSearch: false,                //是否全匹配搜索
@@ -282,7 +284,6 @@
                 cardView: false,                    //是否显示详细视图
                 detailView: false,                  //是否显示父子表
                 locale: 'zh-CN',                    //本地化
-                toolbar: "#toolbar",               //指明自定义的toolbar
                 queryParamsType: 'limit',
                 //请求服务数据时所传参数
                 queryParams:
@@ -598,7 +599,7 @@
                         sortOrder: "asc",                   //排序方式
                         sidePagination: "client",           //分页方式：client客户端分页，server服务端分页（*）
                         pageNumber: 1,                      //初始化加载第一页，默认第一页,并记录
-                        pageSize: 14,                     //每页的记录行数（*）
+                        pageSize: 20,                     //每页的记录行数（*）
                         pageList: [20, 30, 50, 100],       //可供选择的每页的行数（*）
                         search: false,                      //是否显示表格搜索
                         strictSearch: false,                //是否全匹配搜索

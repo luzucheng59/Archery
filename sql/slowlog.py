@@ -2,6 +2,7 @@
 import MySQLdb
 import simplejson as json
 import datetime
+import pymysql
 from django.contrib.auth.decorators import permission_required
 from django.db.models import F, Sum, Value as V, Max
 from django.db.models.functions import Concat
@@ -10,6 +11,7 @@ from django.views.decorators.cache import cache_page
 from pyecharts.charts import Line
 from pyecharts import options as opts
 from common.utils.chart_dao import ChartDao
+from sql.engines import get_engine
 
 from sql.utils.resource_group import user_instances
 from common.utils.extend_json_encoder import ExtendJSONEncoder
@@ -43,7 +45,7 @@ def slowquery_review(request):
         # 调用阿里云慢日志接口
         query_engine = get_engine(instance=instance_info)
         result = query_engine.slowquery_review(
-            self, start_time, end_time, db_name, limit, offset
+            start_time, end_time, db_name, limit, offset
         )
     else:
         limit = offset + limit
@@ -66,7 +68,7 @@ def slowquery_review(request):
                 fingerprint__icontains=search,
                 **filter_kwargs
             )
-            .annotate(SQLText=F("fingerprint"), SQLId=F("checksum"))
+            .annotate(SQLText=Max("fingerprint"), SQLId=F("checksum"))
             .values("SQLText", "SQLId")
             .annotate(
                 CreateTime=Max("slowqueryhistory__ts_max"),
@@ -77,8 +79,12 @@ def slowquery_review(request):
                 MySQLTotalExecutionTimes=Sum(
                     "slowqueryhistory__query_time_sum"
                 ),  # 执行总时长
-                ParseTotalRowCounts=Sum("slowqueryhistory__rows_examined_sum"),  # 扫描总行数
-                ReturnTotalRowCounts=Sum("slowqueryhistory__rows_sent_sum"),  # 返回总行数
+                ParseTotalRowCounts=Sum(
+                    "slowqueryhistory__rows_examined_sum"
+                ),  # 扫描总行数
+                ReturnTotalRowCounts=Sum(
+                    "slowqueryhistory__rows_sent_sum"
+                ),  # 返回总行数
                 ParseRowAvg=Sum("slowqueryhistory__rows_examined_sum")
                 / Sum("slowqueryhistory__ts_cnt"),  # 平均扫描行数
                 ReturnRowAvg=Sum("slowqueryhistory__rows_sent_sum")
@@ -156,7 +162,9 @@ def slowquery_review_history(request):
             sample__icontains=search,
             **filter_kwargs
         ).annotate(
-            ExecutionStartTime=F("ts_min"),  # 本次统计(每5分钟一次)该类型sql语句出现的最小时间
+            ExecutionStartTime=F(
+                "ts_min"
+            ),  # 本次统计(每5分钟一次)该类型sql语句出现的最小时间
             DBName=F("db_max"),  # 数据库名
             HostAddress=Concat(
                 V("'"), "user_max", V("'"), V("@"), V("'"), "client_max", V("'")
@@ -206,7 +214,7 @@ def slowquery_review_history(request):
 def report(request):
     """返回慢SQL历史趋势"""
     checksum = request.GET.get("checksum")
-    checksum = MySQLdb.escape_string(checksum).decode("utf-8")
+    checksum = pymysql.escape_string(checksum)
     cnt_data = ChartDao().slow_query_review_history_by_cnt(checksum)
     pct_data = ChartDao().slow_query_review_history_by_pct_95_time(checksum)
     cnt_x_data = [row[1] for row in cnt_data["rows"]]

@@ -1,5 +1,6 @@
 # -*- coding:utf-8 -*-
 import logging
+import math
 
 import sqlparse
 from django.forms import model_to_dict
@@ -23,11 +24,24 @@ def data_masking(instance, db_name, sql, sql_result):
         for token in p.tokens:
             if token.ttype is Keyword and token.value.upper() in ["UNION", "UNION ALL"]:
                 keywords_count["UNION"] = keywords_count.get("UNION", 0) + 1
-        # 通过goInception获取select list
-        inception_engine = GoInceptionEngine()
-        select_list = inception_engine.query_data_masking(
-            instance=instance, db_name=db_name, sql=sql
-        )
+        if instance.db_type == "mongo":
+            select_list = [
+                {
+                    "index": index,
+                    "field": field,
+                    "type": "varchar",
+                    "table": "*",
+                    "schema": db_name,
+                    "alias": field,
+                }
+                for index, field in enumerate(sql_result.column_list)
+            ]
+        else:
+            # 通过goInception获取select list
+            inception_engine = GoInceptionEngine()
+            select_list = inception_engine.query_data_masking(
+                instance=instance, db_name=db_name, sql=sql
+            )
         # 如果UNION存在，那么调用去重函数
         select_list = (
             del_repeat(select_list, keywords_count) if keywords_count else select_list
@@ -44,6 +58,18 @@ def data_masking(instance, db_name, sql, sql_result):
             for column in hit_columns:
                 index, rule_type = column["index"], column["rule_type"]
                 masking_rule = masking_rules.get(rule_type)
+                # 如果是默认的三段式通用脱敏规则，数据库没有查询结果，则创建一个对象。
+                if not masking_rule and rule_type == 100:
+                    masking_rule_obj, created = DataMaskingRules.objects.get_or_create(
+                        rule_type=100,
+                        rule_regex="^([\\s\\S]{0,}?)([\\s\\S]{0,}?)([\\s\\S]{0,}?)$",
+                        hide_group=2,
+                        rule_desc="三段式通用脱敏规则：内部实现，正则暂不支持修改，隐藏组支持修改。",
+                    )
+                    if created:
+                        masking_rule = model_to_dict(masking_rule_obj)
+                        masking_rules[rule_type] = masking_rule  # 更新字典
+                        masking_rule = masking_rules.get(rule_type)
                 if not masking_rule:
                     continue
                 for idx, item in enumerate(rows):
@@ -89,7 +115,7 @@ def analyze_query_tree(select_list, instance):
     """解析select list, 返回命中脱敏规则的列信息"""
     # 获取实例全部激活的脱敏字段信息，减少循环查询，提升效率
     masking_columns = {
-        f"{i.instance}-{i.table_schema}-{i.table_name}-{i.column_name}": model_to_dict(
+        f"{i.instance}-{i.table_schema}-{i.table_name}-{i.column_name.lower()}": model_to_dict(
             i
         )
         for i in DataMaskingColumns.objects.filter(instance=instance, active=True)
@@ -102,9 +128,15 @@ def analyze_query_tree(select_list, instance):
             column.get("table"),
             column.get("field"),
         )
+        field = field.lower()
         masking_column = masking_columns.get(
             f"{instance}-{table_schema}-{table}-{field}"
         )
+
+        # 未找到。看看通用的规则是否存在。
+        if not masking_column:
+            masking_column = masking_columns.get(f"{instance}-*-*-{field}")
+
         if masking_column:
             hit_columns.append(
                 {
@@ -122,16 +154,42 @@ def analyze_query_tree(select_list, instance):
 
 def regex(masking_rule, value):
     """利用正则表达式脱敏数据"""
+    # 如果为null或none或空字符串，则不脱敏直接返回。
+    if not value:
+        return value
     rule_regex = masking_rule["rule_regex"]
+
+    rule_type = masking_rule["rule_type"]
+    # 系统通用规则正则表达式。 这是动态的。
+    if rule_type == 100 and isinstance(value, str):
+        value_average = math.floor(len(value) / 3)
+        value_remainder = len(value) % 3
+        value_average_1 = str(value_average)
+        value_average_2 = str(value_average + (1 if value_remainder > 0 else 0))
+        value_average_3 = str(value_average + (1 if value_remainder > 1 else 0))
+        # value_len_str=str(value_len if value_len >= 1 else 1)
+        rule_regex = (
+            "^([\\s\\S]{"
+            + value_average_1
+            + ",}?)([\\s\\S]{"
+            + value_average_2
+            + ",}?)([\\s\\S]{"
+            + value_average_3
+            + ",}?)$"
+        )
+
     hide_group = masking_rule["hide_group"]
     # 正则匹配必须分组，隐藏的组会使用****代替
     try:
         p = re.compile(rule_regex, re.I)
         m = p.search(str(value))
         masking_str = ""
+        if m is None:
+            return value
         for i in range(m.lastindex):
             if i == hide_group - 1:
-                group = "****"
+                # 长度不对外隐藏，还原长度。
+                group = "*" * len(m.group(i + 1))
             else:
                 group = m.group(i + 1)
             masking_str = masking_str + group
